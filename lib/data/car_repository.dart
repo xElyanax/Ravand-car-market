@@ -1,0 +1,599 @@
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../core/formatters.dart';
+import 'car_model.dart';
+import 'demo_data.dart';
+
+enum CarDataSource { network, cache, demo }
+
+/// One atomic payload for a ChangeNotifier (or any other state holder).
+class CarDataResult {
+  CarDataResult({
+    required List<CarModel> cars,
+    required this.source,
+    required this.fetchedAt,
+    this.requestedDate,
+    this.error,
+  }) : cars = List.unmodifiable(cars);
+
+  final List<CarModel> cars;
+  final CarDataSource source;
+  final DateTime fetchedAt;
+  final String? requestedDate;
+  final String? error;
+
+  bool get isDemo => source == CarDataSource.demo;
+  bool get isStale => source == CarDataSource.cache;
+  bool get hasError => error != null && error!.isNotEmpty;
+}
+
+class CarRepository {
+  CarRepository({
+    http.Client? client,
+    SharedPreferences? preferences,
+    String? runtimeToken,
+    this.timeout = const Duration(seconds: 15),
+  }) : _client = client ?? http.Client(),
+       _ownsClient = client == null,
+       _preferences = preferences,
+       _runtimeToken = _cleanToken(runtimeToken);
+
+  static const _environmentToken = String.fromEnvironment('SOURCEARENA_TOKEN');
+  static const _host = 'apis.sourcearena.ir';
+  static const _path = '/api/';
+
+  static const _latestJsonKey = 'sourcearena.latest.json.v1';
+  static const _latestSavedAtKey = 'sourcearena.latest.saved_at.v1';
+  static const _historyJsonKey = 'sourcearena.history.json.v1';
+  static const _historyDateKey = 'sourcearena.history.date.v1';
+  static const _historySavedAtKey = 'sourcearena.history.saved_at.v1';
+
+  final http.Client _client;
+  final bool _ownsClient;
+  final Duration timeout;
+  SharedPreferences? _preferences;
+  Future<SharedPreferences>? _preferencesFuture;
+  String? _runtimeToken;
+  bool _disposed = false;
+
+  /// Runtime value wins over `--dart-define=SOURCEARENA_TOKEN=...`.
+  String? get effectiveToken {
+    return _runtimeToken ?? _cleanToken(_environmentToken);
+  }
+
+  /// The device-local override, excluding any compile-time fallback.
+  String? get runtimeToken => _runtimeToken;
+
+  bool get hasToken => effectiveToken != null;
+
+  /// Passing null or a blank value restores the compile-time token.
+  void setRuntimeToken(String? token) {
+    _runtimeToken = _cleanToken(token);
+  }
+
+  Future<CarDataResult> fetchLatest({bool forceRefresh = false}) {
+    return fetchCars(forceRefresh: forceRefresh);
+  }
+
+  Future<CarDataResult> fetchHistorical(
+    String jalaliDate, {
+    bool forceRefresh = false,
+  }) {
+    return fetchCars(jalaliDate: jalaliDate, forceRefresh: forceRefresh);
+  }
+
+  /// Loads a current or historical full-market snapshot.
+  ///
+  /// Historical snapshots are immutable and served from the selected-date
+  /// cache first. Current data attempts the network first and uses cached data
+  /// only as a graceful fallback. When neither is available, deterministic
+  /// demo data keeps the whole product usable and [CarDataResult.isDemo] makes
+  /// that state explicit to the UI.
+  Future<CarDataResult> fetchCars({
+    String? jalaliDate,
+    bool forceRefresh = false,
+  }) async {
+    _ensureNotDisposed();
+    final requestedDate = _validateDate(jalaliDate);
+
+    if (requestedDate != null && !forceRefresh) {
+      final cached = await _readCache(requestedDate: requestedDate);
+      if (cached != null) return cached;
+    }
+
+    final token = effectiveToken;
+    if (token == null) {
+      final cached = await _readCache(requestedDate: requestedDate);
+      if (cached != null) {
+        return _withError(
+          cached,
+          'توکن سرویس تنظیم نشده؛ آخرین داده ذخیره‌شده نمایش داده می‌شود.',
+        );
+      }
+      return _demoResult(
+        requestedDate: requestedDate,
+        error: 'توکن سرویس تنظیم نشده و داده‌های نمایشی در حال استفاده هستند.',
+      );
+    }
+
+    try {
+      final parameters = <String, String>{'token': token, 'car': 'all'};
+      if (requestedDate != null) parameters['date'] = requestedDate;
+      final uri = Uri.https(_host, _path, parameters);
+      final response = await _client
+          .get(uri, headers: const {'Accept': 'application/json'})
+          .timeout(timeout);
+
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw _RepositoryException(_messageForStatus(response.statusCode));
+      }
+
+      var rawJson = utf8
+          .decode(response.bodyBytes, allowMalformed: true)
+          .trim();
+      if (rawJson.startsWith('\ufeff')) rawJson = rawJson.substring(1);
+      final cars = _parseCars(rawJson);
+      if (cars.isEmpty) {
+        throw const _RepositoryException(
+          'پاسخ سرویس معتبر بود اما خودرویی در آن پیدا نشد.',
+        );
+      }
+
+      await _writeCache(
+        rawJson: rawJson,
+        requestedDate: requestedDate,
+        savedAt: DateTime.now(),
+      );
+      return CarDataResult(
+        cars: cars,
+        source: CarDataSource.network,
+        fetchedAt: DateTime.now(),
+        requestedDate: requestedDate,
+      );
+    } on TimeoutException {
+      return _fallbackAfterFailure(
+        requestedDate: requestedDate,
+        message:
+            'مهلت اتصال به SourceArena تمام شد؛ اینترنت یا وضعیت سرویس را بررسی کنید.',
+      );
+    } on _RepositoryException catch (error) {
+      return _fallbackAfterFailure(
+        requestedDate: requestedDate,
+        message: error.message,
+      );
+    } on FormatException {
+      return _fallbackAfterFailure(
+        requestedDate: requestedDate,
+        message: 'پاسخ SourceArena یک JSON معتبر با ساختار قابل خواندن نیست.',
+      );
+    } on http.ClientException {
+      return _fallbackAfterFailure(
+        requestedDate: requestedDate,
+        message: kIsWeb
+            ? 'مرورگر نتوانست به SourceArena متصل شود؛ اینترنت، DNS یا محدودیت CORS را بررسی کنید.'
+            : 'ارتباط شبکه با SourceArena برقرار نشد؛ اینترنت یا DNS را بررسی کنید.',
+      );
+    } catch (_) {
+      // Avoid surfacing exception strings because HTTP errors may include the
+      // request URI and therefore the secret query token.
+      return _fallbackAfterFailure(
+        requestedDate: requestedDate,
+        message: 'خطای پیش‌بینی‌نشده‌ای هنگام دریافت قیمت‌ها رخ داد.',
+      );
+    }
+  }
+
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    if (_ownsClient) _client.close();
+  }
+
+  Future<CarDataResult> _fallbackAfterFailure({
+    required String? requestedDate,
+    required String message,
+  }) async {
+    final cached = await _readCache(requestedDate: requestedDate);
+    if (cached != null) {
+      return _withError(cached, '$message داده ذخیره‌شده نمایش داده می‌شود.');
+    }
+    return _demoResult(
+      requestedDate: requestedDate,
+      error: '$message داده‌های نمایشی در حال استفاده هستند.',
+    );
+  }
+
+  CarDataResult _demoResult({
+    required String? requestedDate,
+    required String error,
+  }) {
+    final cars = requestedDate == null
+        ? buildDemoCars()
+        : demoSnapshotForDate(requestedDate);
+    return CarDataResult(
+      cars: cars,
+      source: CarDataSource.demo,
+      fetchedAt: DateTime.now(),
+      requestedDate: requestedDate,
+      error: error,
+    );
+  }
+
+  CarDataResult _withError(CarDataResult result, String error) {
+    return CarDataResult(
+      cars: result.cars,
+      source: result.source,
+      fetchedAt: result.fetchedAt,
+      requestedDate: result.requestedDate,
+      error: error,
+    );
+  }
+
+  Future<CarDataResult?> _readCache({required String? requestedDate}) async {
+    try {
+      final preferences = await _getPreferences();
+      late final String? rawJson;
+      late final String? savedAtValue;
+      if (requestedDate == null) {
+        rawJson = preferences.getString(_latestJsonKey);
+        savedAtValue = preferences.getString(_latestSavedAtKey);
+      } else {
+        if (preferences.getString(_historyDateKey) != requestedDate) {
+          return null;
+        }
+        rawJson = preferences.getString(_historyJsonKey);
+        savedAtValue = preferences.getString(_historySavedAtKey);
+      }
+      if (rawJson == null || rawJson.trim().isEmpty) return null;
+
+      final cars = _parseCars(rawJson);
+      if (cars.isEmpty) return null;
+      return CarDataResult(
+        cars: cars,
+        source: CarDataSource.cache,
+        fetchedAt: DateTime.tryParse(savedAtValue ?? '') ?? DateTime.now(),
+        requestedDate: requestedDate,
+      );
+    } catch (_) {
+      // Cache corruption or plugin failure should never block network/demo data.
+      return null;
+    }
+  }
+
+  Future<void> _writeCache({
+    required String rawJson,
+    required String? requestedDate,
+    required DateTime savedAt,
+  }) async {
+    try {
+      final preferences = await _getPreferences();
+      if (requestedDate == null) {
+        await preferences.setString(_latestJsonKey, rawJson);
+        await preferences.setString(
+          _latestSavedAtKey,
+          savedAt.toIso8601String(),
+        );
+      } else {
+        await preferences.setString(_historyJsonKey, rawJson);
+        await preferences.setString(_historyDateKey, requestedDate);
+        await preferences.setString(
+          _historySavedAtKey,
+          savedAt.toIso8601String(),
+        );
+      }
+    } catch (_) {
+      // A successful API response remains useful even if local caching fails.
+    }
+  }
+
+  Future<SharedPreferences> _getPreferences() {
+    final existing = _preferences;
+    if (existing != null) return Future.value(existing);
+    return _preferencesFuture ??= SharedPreferences.getInstance().then((value) {
+      _preferences = value;
+      return value;
+    });
+  }
+
+  List<CarModel> _parseCars(String rawJson) {
+    Object? decoded = jsonDecode(rawJson);
+    // A few PHP-style APIs wrap the real JSON document in a JSON string.
+    for (var depth = 0; depth < 2 && decoded is String; depth++) {
+      final nested = decoded.trim();
+      if (!(nested.startsWith('{') || nested.startsWith('['))) break;
+      decoded = jsonDecode(nested);
+    }
+
+    _throwIfErrorEnvelope(decoded);
+    if (decoded is! Map && decoded is! List) {
+      throw const FormatException('Unsupported SourceArena response root.');
+    }
+
+    final maps = _extractCarMaps(decoded);
+    final byId = <int, CarModel>{};
+    for (final map in maps) {
+      final car = CarModel.fromJson(map);
+      if (car.name.isEmpty && car.uniqueId.isEmpty) continue;
+      byId[car.id] = car;
+    }
+    return List.unmodifiable(byId.values);
+  }
+
+  void _throwIfErrorEnvelope(Object? value) {
+    if (value is String) {
+      if (value.trim().isNotEmpty) {
+        throw _RepositoryException(
+          _messageForEnvelopeError(diagnosticText: value),
+        );
+      }
+      return;
+    }
+    if (value is! Map) return;
+
+    final map = <String, Object?>{
+      for (final entry in value.entries)
+        entry.key.toString().toLowerCase(): entry.value,
+    };
+    Object? firstValue(List<String> keys) {
+      for (final key in keys) {
+        if (map.containsKey(key)) return map[key];
+      }
+      return null;
+    }
+
+    final statusValue = firstValue(const ['status', 'success', 'ok']);
+    final errorValue = firstValue(const ['error', 'errors']);
+    final code = _parseStatusCode(
+      firstValue(const ['status_code', 'statuscode', 'http_code', 'code']),
+    );
+    final diagnosticParts = <String>[
+      for (final key in const [
+        'message',
+        'msg',
+        'error',
+        'errors',
+        'detail',
+        'description',
+      ])
+        if (map[key] != null) map[key].toString(),
+    ];
+    final diagnosticText = diagnosticParts.join(' ');
+
+    final hasKnownErrorStatus =
+        code == 401 ||
+        code == 403 ||
+        code == 429 ||
+        (code != null && code >= 500 && code <= 599);
+    final isFailure = _isFailureFlag(statusValue) || _hasErrorValue(errorValue);
+
+    if (hasKnownErrorStatus || isFailure) {
+      throw _RepositoryException(
+        _messageForEnvelopeError(
+          statusCode: code,
+          diagnosticText: diagnosticText,
+        ),
+      );
+    }
+
+    final hasNestedPayload = map.values.any(
+      (item) => item is Map || item is List,
+    );
+    if (!_looksLikeCar(Map<String, dynamic>.from(map)) &&
+        !hasNestedPayload &&
+        diagnosticText.trim().isNotEmpty) {
+      throw _RepositoryException(
+        _messageForEnvelopeError(
+          statusCode: code,
+          diagnosticText: diagnosticText,
+        ),
+      );
+    }
+  }
+
+  int? _parseStatusCode(Object? value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    return int.tryParse(value?.toString().trim() ?? '');
+  }
+
+  bool _isFailureFlag(Object? value) {
+    if (value is bool) return !value;
+    if (value is num) {
+      return value == 0 || (value >= 400 && value <= 599);
+    }
+    final normalized = value?.toString().trim().toLowerCase();
+    return const {
+      '0',
+      'false',
+      'error',
+      'failed',
+      'failure',
+      'unauthorized',
+      'forbidden',
+      'invalid',
+    }.contains(normalized);
+  }
+
+  bool _hasErrorValue(Object? value) {
+    if (value == null || value == false) return false;
+    if (value is num) return value != 0;
+    if (value is String) {
+      final normalized = value.trim().toLowerCase();
+      return normalized.isNotEmpty &&
+          !const {
+            '0',
+            'false',
+            'null',
+            'none',
+            'success',
+            'ok',
+          }.contains(normalized);
+    }
+    if (value is Iterable) return value.isNotEmpty;
+    if (value is Map) return value.isNotEmpty;
+    return true;
+  }
+
+  String _messageForStatus(int statusCode) {
+    return _messageForEnvelopeError(statusCode: statusCode);
+  }
+
+  String _messageForEnvelopeError({
+    int? statusCode,
+    String diagnosticText = '',
+  }) {
+    if (statusCode == 401 || statusCode == 403) {
+      return 'توکن SourceArena نامعتبر، منقضی یا فاقد دسترسی است.';
+    }
+    if (statusCode == 429) {
+      return 'سهمیه درخواست‌های SourceArena تمام شده یا محدودیت تعداد درخواست فعال است.';
+    }
+    if (statusCode != null && statusCode >= 500 && statusCode <= 599) {
+      return 'سرویس SourceArena موقتاً دچار اختلال است (خطای سرور $statusCode).';
+    }
+
+    final diagnostic = diagnosticText.toLowerCase();
+    const quotaMarkers = [
+      'quota',
+      'rate limit',
+      'too many',
+      'limit exceeded',
+      'request limit',
+      'سهمیه',
+      'تعداد درخواست',
+      'محدودیت درخواست',
+    ];
+    if (quotaMarkers.any(diagnostic.contains)) {
+      return 'سهمیه درخواست‌های SourceArena تمام شده یا محدودیت تعداد درخواست فعال است.';
+    }
+
+    const credentialMarkers = [
+      'unauthorized',
+      'forbidden',
+      'invalid token',
+      'expired token',
+      'api key',
+      'apikey',
+      'access denied',
+      'توکن',
+      'کلید دسترسی',
+      'نامعتبر',
+      'منقضی',
+      'عدم دسترسی',
+    ];
+    if (credentialMarkers.any(diagnostic.contains)) {
+      return 'توکن SourceArena نامعتبر، منقضی یا فاقد دسترسی است.';
+    }
+
+    const serverMarkers = [
+      'internal server',
+      'server error',
+      'unavailable',
+      'maintenance',
+      'temporarily',
+      'خطای سرور',
+      'در دسترس نیست',
+      'تعمیر',
+    ];
+    if (serverMarkers.any(diagnostic.contains)) {
+      return 'سرویس SourceArena موقتاً دچار اختلال است.';
+    }
+
+    if (statusCode != null) {
+      return 'SourceArena با کد HTTP $statusCode پاسخ داد و داده خودرو دریافت نشد.';
+    }
+    return 'SourceArena یک پاسخ خطا برگرداند و داده خودرو دریافت نشد.';
+  }
+
+  List<Map<String, dynamic>> _extractCarMaps(Object? value, [int depth = 0]) {
+    if (value == null || depth > 8) return const [];
+    if (value is List) {
+      final result = <Map<String, dynamic>>[];
+      for (final item in value) {
+        result.addAll(_extractCarMaps(item, depth + 1));
+      }
+      return result;
+    }
+    if (value is! Map) return const [];
+
+    final map = <String, dynamic>{
+      for (final entry in value.entries) entry.key.toString(): entry.value,
+    };
+    if (_looksLikeCar(map)) return [map];
+
+    final result = <Map<String, dynamic>>[];
+    const preferredContainers = [
+      'data',
+      'result',
+      'results',
+      'cars',
+      'car',
+      'items',
+      'response',
+      'records',
+    ];
+    final visited = <String>{};
+    for (final key in preferredContainers) {
+      if (map.containsKey(key)) {
+        visited.add(key);
+        result.addAll(_extractCarMaps(map[key], depth + 1));
+      }
+    }
+    if (result.isNotEmpty) return result;
+
+    // Also supports maps keyed by cid/unique id rather than a JSON array.
+    for (final entry in map.entries) {
+      if (!visited.contains(entry.key) &&
+          (entry.value is Map || entry.value is List)) {
+        result.addAll(_extractCarMaps(entry.value, depth + 1));
+      }
+    }
+    return result;
+  }
+
+  bool _looksLikeCar(Map<String, dynamic> value) {
+    final hasId =
+        value.containsKey('cid') ||
+        value.containsKey('unique_id') ||
+        value.containsKey('car_id');
+    final hasPrice =
+        value.containsKey('price') ||
+        value.containsKey('latest_price') ||
+        value.containsKey('current_price');
+    final hasIdentity =
+        value.containsKey('type') ||
+        value.containsKey('name') ||
+        value.containsKey('model') ||
+        value.containsKey('car_name');
+    return hasPrice && (hasId || hasIdentity);
+  }
+
+  String? _validateDate(String? value) {
+    if (value == null || value.trim().isEmpty) return null;
+    final normalised = normalizeJalaliDate(value);
+    if (normalised == null) {
+      throw FormatException('Invalid Jalali date: $value');
+    }
+    return normalised;
+  }
+
+  void _ensureNotDisposed() {
+    if (_disposed) throw StateError('CarRepository has been disposed.');
+  }
+
+  static String? _cleanToken(String? token) {
+    final value = token?.trim();
+    return value == null || value.isEmpty ? null : value;
+  }
+}
+
+class _RepositoryException implements Exception {
+  const _RepositoryException(this.message);
+
+  final String message;
+}
