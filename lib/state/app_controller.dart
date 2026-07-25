@@ -352,7 +352,13 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  double returnFor(CarModel car) => _periodReturns[car.id] ?? car.changePercent;
+  bool hasPeriodReturn(CarModel car) {
+    return _periodReturns.containsKey(car.id);
+  }
+
+  double returnFor(CarModel car) {
+    return _periodReturns[car.id] ?? 0;
+  }
 
   Future<InvestmentResult> calculateInvestment(CarModel car, int days) async {
     final target = DateTime.now().subtract(Duration(days: days));
@@ -392,12 +398,20 @@ class AppController extends ChangeNotifier {
   }
 
   List<CarModel> topMovers({required bool rising, int limit = 5}) {
-    final result = [..._cars]
-      ..sort(
-        (a, b) => rising
-            ? b.changePercent.compareTo(a.changePercent)
-            : a.changePercent.compareTo(b.changePercent),
-      );
+    final result =
+        _cars.where((car) => _periodReturns.containsKey(car.id)).where((car) {
+          final value = _periodReturns[car.id] ?? 0;
+
+          return rising ? value > 0 : value < 0;
+        }).toList()..sort((first, second) {
+          final firstReturn = _periodReturns[first.id] ?? 0;
+          final secondReturn = _periodReturns[second.id] ?? 0;
+
+          return rising
+              ? secondReturn.compareTo(firstReturn)
+              : firstReturn.compareTo(secondReturn);
+        });
+
     return result.take(math.min(limit, result.length)).toList();
   }
 
