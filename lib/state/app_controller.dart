@@ -138,6 +138,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> _loadLatest({bool forceRefresh = false}) async {
     final result = await _repository.fetchLatest(forceRefresh: forceRefresh);
+
     if (result.cars.isNotEmpty) _cars = result.cars;
     _source = result.source;
     _fetchedAt = result.fetchedAt;

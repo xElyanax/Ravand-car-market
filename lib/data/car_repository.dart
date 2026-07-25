@@ -483,6 +483,25 @@ class CarRepository {
     return (year * 10000) + (month * 100) + day;
   }
 
+  String _carSnapshotKey(CarModel car) {
+    String normalize(String value) {
+      return cleanText(
+        value,
+      ).replaceAll(RegExp(r'\s+'), ' ').trim().toLowerCase();
+    }
+
+    return [
+      car.id.toString(),
+      car.uniqueId.trim().toLowerCase(),
+      normalize(car.typeEn),
+      normalize(car.brand),
+      normalize(car.model),
+      normalize(car.trim),
+      car.year.toString(),
+      car.marketPrice ? 'market' : 'factory',
+    ].join('|');
+  }
+
   List<CarModel> _parseCars(String rawJson) {
     Object? decoded = jsonDecode(rawJson);
     // A few PHP-style APIs wrap the real JSON document in a JSON string.
@@ -498,13 +517,19 @@ class CarRepository {
     }
 
     final maps = _extractCarMaps(decoded);
-    final byId = <int, CarModel>{};
+    final byIdentity = <String, CarModel>{};
+
     for (final map in maps) {
       final car = CarModel.fromJson(map);
-      if (car.name.isEmpty && car.uniqueId.isEmpty) continue;
-      byId[car.id] = car;
+
+      if (car.name.isEmpty && car.uniqueId.isEmpty) {
+        continue;
+      }
+
+      byIdentity[_carSnapshotKey(car)] = car;
     }
-    return List.unmodifiable(byId.values);
+
+    return List.unmodifiable(byIdentity.values);
   }
 
   void _throwIfErrorEnvelope(Object? value) {

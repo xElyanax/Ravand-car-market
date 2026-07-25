@@ -218,24 +218,44 @@ class _MarketPageState extends State<MarketPage> {
     );
   }
 
+  String _searchKey(String value) {
+    return cleanText(
+      toEnglishDigits(value),
+    ).toLowerCase().replaceAll('\u200c', '').replaceAll(RegExp(r'\s+'), '');
+  }
+
   List<CarModel> _filteredCars() {
-    final query = cleanText(
-      toEnglishDigits(_searchController.text),
-    ).toLowerCase();
+    final query = _searchKey(_searchController.text);
+
     final cars = widget.controller.cars.where((car) {
-      final haystack = cleanText(
-        toEnglishDigits(
-          '${car.displayName} '
-          '${car.brand} '
-          '${car.model} '
-          '${car.trim} '
-          '${car.year} '
-          '${car.description} '
-          '${car.typeEn}',
-        ),
-      ).toLowerCase();
-      if (query.isNotEmpty && !haystack.contains(query)) return false;
-      if (_brand != null && car.brand != _brand) return false;
+      final priceType = car.marketPrice
+          ? 'بازار قیمت بازار market'
+          : 'کارخانه قیمت کارخانه factory';
+
+      final searchableText = [
+        car.displayName,
+        car.name,
+        car.brand,
+        car.model,
+        car.trim,
+        car.typeEn,
+        car.description,
+        car.year.toString(),
+        'مدل ${car.year}',
+        'سال ${car.year}',
+        priceType,
+      ].join(' ');
+
+      final haystack = _searchKey(searchableText);
+
+      if (query.isNotEmpty && !haystack.contains(query)) {
+        return false;
+      }
+
+      if (_brand != null && car.brand != _brand) {
+        return false;
+      }
+
       return switch (_filter) {
         _MarketFilter.all => true,
         _MarketFilter.market => car.marketPrice,
@@ -243,6 +263,7 @@ class _MarketPageState extends State<MarketPage> {
         _MarketFilter.favorites => widget.controller.isFavorite(car),
       };
     }).toList();
+
     cars.sort(
       (a, b) => switch (_sort) {
         _MarketSort.changeDesc => b.changePercent.compareTo(a.changePercent),
@@ -252,6 +273,7 @@ class _MarketPageState extends State<MarketPage> {
         _MarketSort.newest => b.year.compareTo(a.year),
       },
     );
+
     return cars;
   }
 
