@@ -39,6 +39,10 @@ class AppController extends ChangeNotifier {
   final Map<String, CarHistoryResult> _carHistoryResults = {};
   final Set<String> _carHistoryLoadingKeys = {};
   final Map<String, String> _carHistoryErrors = {};
+  CarComparisonHistoryResult? _comparisonHistory;
+  bool _isComparisonHistoryLoading = false;
+  String? _comparisonHistoryError;
+  int _comparisonHistoryRequestId = 0;
 
   List<CarModel> _cars = const [];
   CarDataSource _source = CarDataSource.demo;
@@ -65,6 +69,27 @@ class AppController extends ChangeNotifier {
   int get selectedPeriodDays => _selectedPeriodDays;
   int get tabIndex => _tabIndex;
   Map<int, double> get periodReturns => Map.unmodifiable(_periodReturns);
+  CarComparisonHistoryResult? get comparisonHistory => _comparisonHistory;
+
+  bool get isComparisonHistoryLoading => _isComparisonHistoryLoading;
+
+  String? get comparisonHistoryError => _comparisonHistoryError;
+
+  List<CarPricePoint> get firstComparisonPoints =>
+      _comparisonHistory?.firstPoints ?? const [];
+
+  List<CarPricePoint> get secondComparisonPoints =>
+      _comparisonHistory?.secondPoints ?? const [];
+
+  List<String> get comparisonMissingDates =>
+      _comparisonHistory?.missingDates ?? const [];
+
+  int? get comparisonMinPrice => _comparisonHistory?.minPrice;
+
+  int? get comparisonMaxPrice => _comparisonHistory?.maxPrice;
+
+  bool get hasComparisonHistory =>
+      _comparisonHistory?.hasEnoughDataForChart ?? false;
 
   List<CarPricePoint> historyFor(CarModel car, int days) {
     final result = _carHistoryResults[_historyKey(car, days)];
@@ -257,6 +282,72 @@ class AppController extends ChangeNotifier {
 
   Future<void> _persistCompare() =>
       _preferences.setStringList(_compareKey, _compareIds);
+  Future<void> loadComparisonHistory({
+    required CarModel firstCar,
+    required CarModel secondCar,
+    required Iterable<String> jalaliDates,
+    bool forceRefresh = false,
+  }) async {
+    final dates = jalaliDates.toList(growable: false);
+    final requestId = ++_comparisonHistoryRequestId;
+
+    _isComparisonHistoryLoading = true;
+    _comparisonHistoryError = null;
+    notifyListeners();
+
+    try {
+      final result = await _repository.fetchComparisonHistory(
+        firstCar: firstCar,
+        secondCar: secondCar,
+        jalaliDates: dates,
+        forceRefresh: forceRefresh,
+      );
+
+      // اگر درخواست جدیدتری شروع شده، نتیجه قدیمی را وارد State نکن.
+      if (requestId != _comparisonHistoryRequestId) {
+        return;
+      }
+
+      _comparisonHistory = result;
+
+      if (!result.hasEnoughDataForChart) {
+        _comparisonHistoryError = result.usedDemoData
+            ? 'برای مقایسه واقعی، اتصال به داده‌های SourceArena لازم است.'
+            : 'داده تاریخی مشترک کافی برای مقایسه این دو خودرو پیدا نشد.';
+      }
+    } on FormatException {
+      if (requestId != _comparisonHistoryRequestId) {
+        return;
+      }
+
+      _comparisonHistory = null;
+      _comparisonHistoryError = 'یک یا چند تاریخ شمسی معتبر نیست.';
+    } catch (_) {
+      if (requestId != _comparisonHistoryRequestId) {
+        return;
+      }
+
+      _comparisonHistory = null;
+      _comparisonHistoryError =
+          'دریافت تاریخچه مقایسه با خطای پیش‌بینی‌نشده مواجه شد.';
+    } finally {
+      if (requestId == _comparisonHistoryRequestId) {
+        _isComparisonHistoryLoading = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  void clearComparisonHistory() {
+    // درخواست درحال اجرا نیز دیگر اجازه تغییر State ندارد.
+    _comparisonHistoryRequestId++;
+
+    _comparisonHistory = null;
+    _comparisonHistoryError = null;
+    _isComparisonHistoryLoading = false;
+
+    notifyListeners();
+  }
 
   Future<void> loadPeriod(int days, {bool forceRefresh = false}) async {
     _selectedPeriodDays = days;
