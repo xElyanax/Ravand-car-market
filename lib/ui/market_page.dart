@@ -24,9 +24,31 @@ class _MarketPageState extends State<MarketPage> {
   _MarketFilter _filter = _MarketFilter.all;
   _MarketSort _sort = _MarketSort.changeDesc;
   String? _brand;
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_handleControllerChange);
+  }
+
+  @override
+  void didUpdateWidget(covariant MarketPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.removeListener(_handleControllerChange);
+      widget.controller.addListener(_handleControllerChange);
+    }
+  }
+
+  void _handleControllerChange() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
 
   @override
   void dispose() {
+    widget.controller.removeListener(_handleControllerChange);
     _searchController.dispose();
     super.dispose();
   }
@@ -197,10 +219,20 @@ class _MarketPageState extends State<MarketPage> {
   }
 
   List<CarModel> _filteredCars() {
-    final query = toEnglishDigits(_searchController.text).trim().toLowerCase();
+    final query = cleanText(
+      toEnglishDigits(_searchController.text),
+    ).toLowerCase();
     final cars = widget.controller.cars.where((car) {
-      final haystack = toEnglishDigits(
-        '${car.displayName} ${car.brand} ${car.model} ${car.trim} ${car.year} ${car.description}',
+      final haystack = cleanText(
+        toEnglishDigits(
+          '${car.displayName} '
+          '${car.brand} '
+          '${car.model} '
+          '${car.trim} '
+          '${car.year} '
+          '${car.description} '
+          '${car.typeEn}',
+        ),
       ).toLowerCase();
       if (query.isNotEmpty && !haystack.contains(query)) return false;
       if (_brand != null && car.brand != _brand) return false;
@@ -296,9 +328,11 @@ class _MarketPageState extends State<MarketPage> {
 
   void _resetFilters() {
     _searchController.clear();
+
     setState(() {
       _filter = _MarketFilter.all;
       _brand = null;
+      _sort = _MarketSort.changeDesc;
     });
   }
 }
