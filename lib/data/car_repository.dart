@@ -118,7 +118,6 @@ class CarRepository {
 
   bool get areAllTokensDisabled =>
       _runtimeToken == null && !_allowEnvironmentToken;
-
   Future<CarDataResult> fetchLatest({bool forceRefresh = false}) {
     return fetchCars(forceRefresh: forceRefresh);
   }
