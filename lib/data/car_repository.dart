@@ -49,9 +49,15 @@ class CarRepository {
 
   static const _latestJsonKey = 'sourcearena.latest.json.v1';
   static const _latestSavedAtKey = 'sourcearena.latest.saved_at.v1';
-  static const _historyJsonKey = 'sourcearena.history.json.v1';
-  static const _historyDateKey = 'sourcearena.history.date.v1';
-  static const _historySavedAtKey = 'sourcearena.history.saved_at.v1';
+  static String _historyJsonKeyFor(String date) {
+    final safeDate = date.replaceAll('/', '_');
+    return 'sourcearena.history.$safeDate.json.v2';
+  }
+
+  static String _historySavedAtKeyFor(String date) {
+    final safeDate = date.replaceAll('/', '_');
+    return 'sourcearena.history.$safeDate.saved_at.v2';
+  }
 
   final http.Client _client;
   final bool _ownsClient;
@@ -237,22 +243,31 @@ class CarRepository {
   Future<CarDataResult?> _readCache({required String? requestedDate}) async {
     try {
       final preferences = await _getPreferences();
+
       late final String? rawJson;
       late final String? savedAtValue;
+
       if (requestedDate == null) {
         rawJson = preferences.getString(_latestJsonKey);
         savedAtValue = preferences.getString(_latestSavedAtKey);
       } else {
-        if (preferences.getString(_historyDateKey) != requestedDate) {
-          return null;
-        }
-        rawJson = preferences.getString(_historyJsonKey);
-        savedAtValue = preferences.getString(_historySavedAtKey);
+        rawJson = preferences.getString(_historyJsonKeyFor(requestedDate));
+
+        savedAtValue = preferences.getString(
+          _historySavedAtKeyFor(requestedDate),
+        );
       }
-      if (rawJson == null || rawJson.trim().isEmpty) return null;
+
+      if (rawJson == null || rawJson.trim().isEmpty) {
+        return null;
+      }
 
       final cars = _parseCars(rawJson);
-      if (cars.isEmpty) return null;
+
+      if (cars.isEmpty) {
+        return null;
+      }
+
       return CarDataResult(
         cars: cars,
         source: CarDataSource.cache,
@@ -260,7 +275,7 @@ class CarRepository {
         requestedDate: requestedDate,
       );
     } catch (_) {
-      // Cache corruption or plugin failure should never block network/demo data.
+      // خرابی Cache نباید مانع دریافت داده شبکه یا Demo شود.
       return null;
     }
   }
@@ -272,22 +287,26 @@ class CarRepository {
   }) async {
     try {
       final preferences = await _getPreferences();
+
       if (requestedDate == null) {
         await preferences.setString(_latestJsonKey, rawJson);
+
         await preferences.setString(
           _latestSavedAtKey,
           savedAt.toIso8601String(),
         );
-      } else {
-        await preferences.setString(_historyJsonKey, rawJson);
-        await preferences.setString(_historyDateKey, requestedDate);
-        await preferences.setString(
-          _historySavedAtKey,
-          savedAt.toIso8601String(),
-        );
+
+        return;
       }
+
+      await preferences.setString(_historyJsonKeyFor(requestedDate), rawJson);
+
+      await preferences.setString(
+        _historySavedAtKeyFor(requestedDate),
+        savedAt.toIso8601String(),
+      );
     } catch (_) {
-      // A successful API response remains useful even if local caching fails.
+      // حتی اگر ذخیره محلی شکست خورد، پاسخ موفق API قابل استفاده است.
     }
   }
 
