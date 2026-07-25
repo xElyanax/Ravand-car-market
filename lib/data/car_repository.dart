@@ -84,11 +84,20 @@ class CarRepository {
   SharedPreferences? _preferences;
   Future<SharedPreferences>? _preferencesFuture;
   String? _runtimeToken;
+  bool _allowEnvironmentToken = true;
   bool _disposed = false;
 
   /// Runtime value wins over `--dart-define=SOURCEARENA_TOKEN=...`.
   String? get effectiveToken {
-    return _runtimeToken ?? _cleanToken(_environmentToken);
+    if (_runtimeToken != null) {
+      return _runtimeToken;
+    }
+
+    if (!_allowEnvironmentToken) {
+      return null;
+    }
+
+    return _cleanToken(_environmentToken);
   }
 
   /// The device-local override, excluding any compile-time fallback.
@@ -99,7 +108,16 @@ class CarRepository {
   /// Passing null or a blank value restores the compile-time token.
   void setRuntimeToken(String? token) {
     _runtimeToken = _cleanToken(token);
+    _allowEnvironmentToken = true;
   }
+
+  void disableAllTokens() {
+    _runtimeToken = null;
+    _allowEnvironmentToken = false;
+  }
+
+  bool get areAllTokensDisabled =>
+      _runtimeToken == null && !_allowEnvironmentToken;
 
   Future<CarDataResult> fetchLatest({bool forceRefresh = false}) {
     return fetchCars(forceRefresh: forceRefresh);

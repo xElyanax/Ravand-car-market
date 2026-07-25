@@ -155,6 +155,8 @@ class AppController extends ChangeNotifier {
 
     final previousRuntimeToken = _repository.runtimeToken;
 
+    final previousTokensDisabled = _repository.areAllTokensDisabled;
+
     _repository.setRuntimeToken(normalized);
 
     _isLoading = true;
@@ -169,13 +171,12 @@ class AppController extends ChangeNotifier {
     if (connected) {
       await _preferences.setString(_tokenKey, normalized);
     } else {
-      _repository.setRuntimeToken(previousRuntimeToken);
+      if (previousTokensDisabled) {
+        _repository.disableAllTokens();
+      } else {
+        _repository.setRuntimeToken(previousRuntimeToken);
+      }
     }
-
-    if (result.cars.isNotEmpty) {
-      _cars = result.cars;
-    }
-
     // تاریخچه‌های قبلی مربوط به داده یا توکن قبلی هستند.
     _clearCarHistory();
 
@@ -195,7 +196,13 @@ class AppController extends ChangeNotifier {
 
   Future<void> useDemoMode() async {
     await _preferences.remove(_tokenKey);
-    _repository.setRuntimeToken(null);
+
+    _repository.disableAllTokens();
+
+    _periodReturns.clear();
+    _periodDate = null;
+    _clearCarHistory();
+
     await refresh();
   }
 
