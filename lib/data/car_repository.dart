@@ -32,6 +32,25 @@ class CarDataResult {
   bool get hasError => error != null && error!.isNotEmpty;
 }
 
+class CarHistoryResult {
+  CarHistoryResult({
+    required List<CarPricePoint> points,
+    required List<String> missingDates,
+    required this.usedDemoData,
+  }) : points = List.unmodifiable(points),
+       missingDates = List.unmodifiable(missingDates);
+
+  final List<CarPricePoint> points;
+  final List<String> missingDates;
+  final bool usedDemoData;
+
+  bool get hasData => points.isNotEmpty;
+
+  bool get hasEnoughDataForChart => points.length >= 2;
+
+  bool get isComplete => missingDates.isEmpty;
+}
+
 class CarRepository {
   CarRepository({
     http.Client? client,
@@ -49,9 +68,15 @@ class CarRepository {
 
   static const _latestJsonKey = 'sourcearena.latest.json.v1';
   static const _latestSavedAtKey = 'sourcearena.latest.saved_at.v1';
-  static const _historyJsonKey = 'sourcearena.history.json.v1';
-  static const _historyDateKey = 'sourcearena.history.date.v1';
-  static const _historySavedAtKey = 'sourcearena.history.saved_at.v1';
+  static String _historyJsonKeyFor(String date) {
+    final safeDate = date.replaceAll('/', '_');
+    return 'sourcearena.history.$safeDate.json.v2';
+  }
+
+  static String _historySavedAtKeyFor(String date) {
+    final safeDate = date.replaceAll('/', '_');
+    return 'sourcearena.history.$safeDate.saved_at.v2';
+  }
 
   final http.Client _client;
   final bool _ownsClient;
@@ -59,11 +84,20 @@ class CarRepository {
   SharedPreferences? _preferences;
   Future<SharedPreferences>? _preferencesFuture;
   String? _runtimeToken;
+  bool _allowEnvironmentToken = true;
   bool _disposed = false;
 
   /// Runtime value wins over `--dart-define=SOURCEARENA_TOKEN=...`.
   String? get effectiveToken {
-    return _runtimeToken ?? _cleanToken(_environmentToken);
+    if (_runtimeToken != null) {
+      return _runtimeToken;
+    }
+
+    if (!_allowEnvironmentToken) {
+      return null;
+    }
+
+    return _cleanToken(_environmentToken);
   }
 
   /// The device-local override, excluding any compile-time fallback.
@@ -74,8 +108,16 @@ class CarRepository {
   /// Passing null or a blank value restores the compile-time token.
   void setRuntimeToken(String? token) {
     _runtimeToken = _cleanToken(token);
+    _allowEnvironmentToken = true;
   }
 
+  void disableAllTokens() {
+    _runtimeToken = null;
+    _allowEnvironmentToken = false;
+  }
+
+  bool get areAllTokensDisabled =>
+      _runtimeToken == null && !_allowEnvironmentToken;
   Future<CarDataResult> fetchLatest({bool forceRefresh = false}) {
     return fetchCars(forceRefresh: forceRefresh);
   }
@@ -87,6 +129,66 @@ class CarRepository {
     return fetchCars(jalaliDate: jalaliDate, forceRefresh: forceRefresh);
   }
 
+  Future<CarHistoryResult> fetchHistoryForCar({
+    required CarModel car,
+    required Iterable<String> jalaliDates,
+    bool forceRefresh = false,
+    bool allowDemoData = false,
+  }) async {
+    _ensureNotDisposed();
+
+    final uniqueDates = <String>{};
+
+    for (final rawDate in jalaliDates) {
+      final validatedDate = _validateDate(rawDate);
+
+      if (validatedDate != null) {
+        uniqueDates.add(validatedDate);
+      }
+    }
+
+    final pointsByDate = <String, CarPricePoint>{};
+    final missingDates = <String>[];
+    var usedDemoData = false;
+
+    for (final date in uniqueDates) {
+      final snapshot = await fetchHistorical(date, forceRefresh: forceRefresh);
+
+      if (snapshot.isDemo) {
+        usedDemoData = true;
+
+        if (!allowDemoData) {
+          missingDates.add(date);
+          continue;
+        }
+      }
+
+      final historicalCar = _findMatchingCar(
+        target: car,
+        candidates: snapshot.cars,
+      );
+
+      if (historicalCar == null || historicalCar.price <= 0) {
+        missingDates.add(date);
+        continue;
+      }
+
+      pointsByDate[date] = CarPricePoint(
+        date: date,
+        price: historicalCar.price,
+      );
+    }
+
+    final points = pointsByDate.values.toList()
+      ..sort((first, second) => _compareJalaliDates(first.date, second.date));
+
+    return CarHistoryResult(
+      points: points,
+      missingDates: missingDates,
+      usedDemoData: usedDemoData,
+    );
+  }
+
   /// Loads a current or historical full-market snapshot.
   ///
   /// Historical snapshots are immutable and served from the selected-date
@@ -94,6 +196,7 @@ class CarRepository {
   /// only as a graceful fallback. When neither is available, deterministic
   /// demo data keeps the whole product usable and [CarDataResult.isDemo] makes
   /// that state explicit to the UI.
+  ///
   Future<CarDataResult> fetchCars({
     String? jalaliDate,
     bool forceRefresh = false,
@@ -237,22 +340,31 @@ class CarRepository {
   Future<CarDataResult?> _readCache({required String? requestedDate}) async {
     try {
       final preferences = await _getPreferences();
+
       late final String? rawJson;
       late final String? savedAtValue;
+
       if (requestedDate == null) {
         rawJson = preferences.getString(_latestJsonKey);
         savedAtValue = preferences.getString(_latestSavedAtKey);
       } else {
-        if (preferences.getString(_historyDateKey) != requestedDate) {
-          return null;
-        }
-        rawJson = preferences.getString(_historyJsonKey);
-        savedAtValue = preferences.getString(_historySavedAtKey);
+        rawJson = preferences.getString(_historyJsonKeyFor(requestedDate));
+
+        savedAtValue = preferences.getString(
+          _historySavedAtKeyFor(requestedDate),
+        );
       }
-      if (rawJson == null || rawJson.trim().isEmpty) return null;
+
+      if (rawJson == null || rawJson.trim().isEmpty) {
+        return null;
+      }
 
       final cars = _parseCars(rawJson);
-      if (cars.isEmpty) return null;
+
+      if (cars.isEmpty) {
+        return null;
+      }
+
       return CarDataResult(
         cars: cars,
         source: CarDataSource.cache,
@@ -260,7 +372,7 @@ class CarRepository {
         requestedDate: requestedDate,
       );
     } catch (_) {
-      // Cache corruption or plugin failure should never block network/demo data.
+      // خرابی Cache نباید مانع دریافت داده شبکه یا Demo شود.
       return null;
     }
   }
@@ -272,22 +384,26 @@ class CarRepository {
   }) async {
     try {
       final preferences = await _getPreferences();
+
       if (requestedDate == null) {
         await preferences.setString(_latestJsonKey, rawJson);
+
         await preferences.setString(
           _latestSavedAtKey,
           savedAt.toIso8601String(),
         );
-      } else {
-        await preferences.setString(_historyJsonKey, rawJson);
-        await preferences.setString(_historyDateKey, requestedDate);
-        await preferences.setString(
-          _historySavedAtKey,
-          savedAt.toIso8601String(),
-        );
+
+        return;
       }
+
+      await preferences.setString(_historyJsonKeyFor(requestedDate), rawJson);
+
+      await preferences.setString(
+        _historySavedAtKeyFor(requestedDate),
+        savedAt.toIso8601String(),
+      );
     } catch (_) {
-      // A successful API response remains useful even if local caching fails.
+      // حتی اگر ذخیره محلی شکست خورد، پاسخ موفق API قابل استفاده است.
     }
   }
 
@@ -298,6 +414,92 @@ class CarRepository {
       _preferences = value;
       return value;
     });
+  }
+
+  CarModel? _findMatchingCar({
+    required CarModel target,
+    required List<CarModel> candidates,
+  }) {
+    final targetUniqueId = target.uniqueId.trim();
+
+    if (targetUniqueId.isNotEmpty) {
+      for (final candidate in candidates) {
+        if (candidate.uniqueId.trim() == targetUniqueId) {
+          return candidate;
+        }
+      }
+    }
+
+    if (target.id > 0) {
+      for (final candidate in candidates) {
+        if (candidate.id == target.id) {
+          return candidate;
+        }
+      }
+    }
+
+    final targetIdentity = _fallbackCarIdentity(target);
+
+    for (final candidate in candidates) {
+      if (_fallbackCarIdentity(candidate) == targetIdentity) {
+        return candidate;
+      }
+    }
+
+    return null;
+  }
+
+  String _fallbackCarIdentity(CarModel car) {
+    String normalize(String value) {
+      return cleanText(
+        value,
+      ).replaceAll(RegExp(r'\s+'), ' ').trim().toLowerCase();
+    }
+
+    return [
+      normalize(car.typeEn),
+      normalize(car.brand),
+      normalize(car.model),
+      normalize(car.trim),
+      car.year.toString(),
+    ].join('|');
+  }
+
+  int _compareJalaliDates(String first, String second) {
+    return _jalaliSortKey(first).compareTo(_jalaliSortKey(second));
+  }
+
+  int _jalaliSortKey(String value) {
+    final parts = value.split('/');
+
+    if (parts.length != 3) {
+      return 0;
+    }
+
+    final year = int.tryParse(parts[0]) ?? 0;
+    final month = int.tryParse(parts[1]) ?? 0;
+    final day = int.tryParse(parts[2]) ?? 0;
+
+    return (year * 10000) + (month * 100) + day;
+  }
+
+  String _carSnapshotKey(CarModel car) {
+    String normalize(String value) {
+      return cleanText(
+        value,
+      ).replaceAll(RegExp(r'\s+'), ' ').trim().toLowerCase();
+    }
+
+    return [
+      car.id.toString(),
+      car.uniqueId.trim().toLowerCase(),
+      normalize(car.typeEn),
+      normalize(car.brand),
+      normalize(car.model),
+      normalize(car.trim),
+      car.year.toString(),
+      car.marketPrice ? 'market' : 'factory',
+    ].join('|');
   }
 
   List<CarModel> _parseCars(String rawJson) {
@@ -315,13 +517,19 @@ class CarRepository {
     }
 
     final maps = _extractCarMaps(decoded);
-    final byId = <int, CarModel>{};
+    final byIdentity = <String, CarModel>{};
+
     for (final map in maps) {
       final car = CarModel.fromJson(map);
-      if (car.name.isEmpty && car.uniqueId.isEmpty) continue;
-      byId[car.id] = car;
+
+      if (car.name.isEmpty && car.uniqueId.isEmpty) {
+        continue;
+      }
+
+      byIdentity[_carSnapshotKey(car)] = car;
     }
-    return List.unmodifiable(byId.values);
+
+    return List.unmodifiable(byIdentity.values);
   }
 
   void _throwIfErrorEnvelope(Object? value) {

@@ -136,6 +136,40 @@ void main() {
       controller.dispose();
     });
 
+    test('demo mode disables tokens and avoids network requests', () async {
+      const tokenKey = 'sourcearena_api_token_v2';
+
+      SharedPreferences.setMockInitialValues({tokenKey: 'saved-token'});
+
+      final preferences = await SharedPreferences.getInstance();
+      var networkRequestCount = 0;
+
+      final repository = CarRepository(
+        preferences: preferences,
+        runtimeToken: 'saved-token',
+        client: MockClient((_) async {
+          networkRequestCount++;
+          return http.Response(_validCarsJson, 200);
+        }),
+      );
+
+      final controller = AppController(
+        preferences: preferences,
+        repository: repository,
+      );
+
+      await controller.useDemoMode();
+
+      expect(preferences.getString(tokenKey), isNull);
+      expect(repository.runtimeToken, isNull);
+      expect(repository.areAllTokensDisabled, isTrue);
+      expect(repository.effectiveToken, isNull);
+      expect(networkRequestCount, 0);
+      expect(controller.source, CarDataSource.demo);
+
+      controller.dispose();
+    });
+
     test(
       'persists a candidate only after a successful network check',
       () async {

@@ -24,9 +24,31 @@ class _MarketPageState extends State<MarketPage> {
   _MarketFilter _filter = _MarketFilter.all;
   _MarketSort _sort = _MarketSort.changeDesc;
   String? _brand;
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_handleControllerChange);
+  }
+
+  @override
+  void didUpdateWidget(covariant MarketPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.removeListener(_handleControllerChange);
+      widget.controller.addListener(_handleControllerChange);
+    }
+  }
+
+  void _handleControllerChange() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
 
   @override
   void dispose() {
+    widget.controller.removeListener(_handleControllerChange);
     _searchController.dispose();
     super.dispose();
   }
@@ -196,14 +218,44 @@ class _MarketPageState extends State<MarketPage> {
     );
   }
 
+  String _searchKey(String value) {
+    return cleanText(
+      toEnglishDigits(value),
+    ).toLowerCase().replaceAll('\u200c', '').replaceAll(RegExp(r'\s+'), '');
+  }
+
   List<CarModel> _filteredCars() {
-    final query = toEnglishDigits(_searchController.text).trim().toLowerCase();
+    final query = _searchKey(_searchController.text);
+
     final cars = widget.controller.cars.where((car) {
-      final haystack = toEnglishDigits(
-        '${car.displayName} ${car.brand} ${car.model} ${car.trim} ${car.year} ${car.description}',
-      ).toLowerCase();
-      if (query.isNotEmpty && !haystack.contains(query)) return false;
-      if (_brand != null && car.brand != _brand) return false;
+      final priceType = car.marketPrice
+          ? 'بازار قیمت بازار market'
+          : 'کارخانه قیمت کارخانه factory';
+
+      final searchableText = [
+        car.displayName,
+        car.name,
+        car.brand,
+        car.model,
+        car.trim,
+        car.typeEn,
+        car.description,
+        car.year.toString(),
+        'مدل ${car.year}',
+        'سال ${car.year}',
+        priceType,
+      ].join(' ');
+
+      final haystack = _searchKey(searchableText);
+
+      if (query.isNotEmpty && !haystack.contains(query)) {
+        return false;
+      }
+
+      if (_brand != null && car.brand != _brand) {
+        return false;
+      }
+
       return switch (_filter) {
         _MarketFilter.all => true,
         _MarketFilter.market => car.marketPrice,
@@ -211,6 +263,7 @@ class _MarketPageState extends State<MarketPage> {
         _MarketFilter.favorites => widget.controller.isFavorite(car),
       };
     }).toList();
+
     cars.sort(
       (a, b) => switch (_sort) {
         _MarketSort.changeDesc => b.changePercent.compareTo(a.changePercent),
@@ -220,6 +273,7 @@ class _MarketPageState extends State<MarketPage> {
         _MarketSort.newest => b.year.compareTo(a.year),
       },
     );
+
     return cars;
   }
 
@@ -296,9 +350,11 @@ class _MarketPageState extends State<MarketPage> {
 
   void _resetFilters() {
     _searchController.clear();
+
     setState(() {
       _filter = _MarketFilter.all;
       _brand = null;
+      _sort = _MarketSort.changeDesc;
     });
   }
 }
