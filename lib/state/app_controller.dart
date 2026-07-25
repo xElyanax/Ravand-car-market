@@ -8,6 +8,8 @@ import '../data/car_model.dart';
 import '../data/car_repository.dart';
 import '../core/formatters.dart';
 
+import '../services/investment_calculator.dart';
+
 class AppController extends ChangeNotifier {
   AppController({
     required SharedPreferences preferences,
@@ -388,26 +390,43 @@ class AppController extends ChangeNotifier {
     return _periodReturns[car.id] ?? 0;
   }
 
-  Future<InvestmentResult> calculateInvestment(CarModel car, int days) async {
-    final target = DateTime.now().subtract(Duration(days: days));
-    final jalali = Jalali.fromDateTime(target);
-    final date = '${jalali.year}/${jalali.month}/${jalali.day}';
-    final result = await _repository.fetchHistorical(date);
-    final previous = result.cars.where((item) => item.id == car.id).firstOrNull;
-    if (previous == null || previous.price <= 0 || car.price <= 0) {
+  Future<InvestmentResult> calculateInvestmentForDate(
+    CarModel car,
+    String jalaliDate, {
+    bool forceRefresh = false,
+  }) async {
+    final result = await _repository.fetchCarAtDate(
+      car: car,
+      jalaliDate: jalaliDate,
+      forceRefresh: forceRefresh,
+    );
+
+    final previousCar = result.car;
+
+    if (!result.available || previousCar == null || car.price <= 0) {
       return InvestmentResult.unavailable(
         car: car,
-        requestedDate: date,
+        requestedDate: result.requestedDate,
         source: result.source,
       );
     }
+
     return InvestmentResult(
       car: car,
-      requestedDate: result.requestedDate ?? date,
-      previousPrice: previous.price,
+      requestedDate: result.requestedDate,
+      previousPrice: previousCar.price,
       currentPrice: car.price,
       source: result.source,
     );
+  }
+
+  Future<InvestmentResult> calculateInvestment(CarModel car, int days) {
+    final target = DateTime.now().subtract(Duration(days: days));
+    final jalali = Jalali.fromDateTime(target);
+
+    final date = '${jalali.year}/${jalali.month}/${jalali.day}';
+
+    return calculateInvestmentForDate(car, date);
   }
 
   List<CarModel> budgetMatches(int budget, {double tolerance = 0}) {
@@ -568,13 +587,17 @@ class AppController extends ChangeNotifier {
 }
 
 class InvestmentResult {
-  const InvestmentResult({
+  InvestmentResult({
     required this.car,
     required this.requestedDate,
     required this.previousPrice,
     required this.currentPrice,
     required this.source,
-  }) : available = true;
+  }) : calculation = const InvestmentCalculator().calculate(
+         purchasePrice: previousPrice,
+         currentPrice: currentPrice,
+       ),
+       available = true;
 
   const InvestmentResult.unavailable({
     required this.car,
@@ -582,6 +605,7 @@ class InvestmentResult {
     required this.source,
   }) : previousPrice = 0,
        currentPrice = 0,
+       calculation = null,
        available = false;
 
   final CarModel car;
@@ -591,7 +615,17 @@ class InvestmentResult {
   final CarDataSource source;
   final bool available;
 
-  int get profit => currentPrice - previousPrice;
-  double get profitPercent =>
-      previousPrice == 0 ? 0 : profit * 100 / previousPrice;
+  final InvestmentCalculationResult? calculation;
+
+  int get profit => calculation?.profitOrLossAmount ?? 0;
+
+  double get profitPercent => calculation?.returnPercent ?? 0;
+
+  InvestmentOutcome? get outcome => calculation?.outcome;
+
+  bool get isProfit => calculation?.isProfit ?? false;
+
+  bool get isLoss => calculation?.isLoss ?? false;
+
+  bool get isUnchanged => calculation?.isUnchanged ?? false;
 }
