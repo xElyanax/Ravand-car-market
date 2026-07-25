@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <!--
+    If you are serving your web app in a path other than the root, change the
+    href value below to reflect the base path you are serving from.
+
+    The path provided below has to start and end with a slash "/" in order for
+    it to work correctly.
+
+    For more details:
+    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
+
+    This is a placeholder for base href that will be replaced by the value of
+    the `--base-href` argument provided to `flutter build`.
+  -->
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="رَوَند؛ تحلیل مدرن بازار خودرو ایران">
+  <meta name="theme-color" content="#0B1022">
+
+  <!-- iOS meta tags & icons -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="رَوَند">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <title>رَوَند | تحلیل بازار خودرو</title>
+  <link rel="manifest" href="manifest.json">
+  <style>
+    html, body { height: 100%; margin: 0; background: #080d1f; }
+    #ravand-loader {
+      position: fixed; inset: 0; z-index: 9999; display: grid; place-items: center;
+      direction: rtl; color: #fff; font-family: Tahoma, Arial, sans-serif;
+      background:
+        radial-gradient(circle at 15% 18%, rgba(49,88,255,.28), transparent 36%),
+        radial-gradient(circle at 85% 78%, rgba(32,191,174,.18), transparent 34%),
+        linear-gradient(145deg, #080d1f, #111a3c);
+      transition: opacity .28s ease;
+    }
+    #ravand-loader.hide { opacity: 0; pointer-events: none; }
+    .loader-card { text-align: center; padding: 32px; }
+    .loader-mark {
+      width: 72px; height: 72px; margin: 0 auto 18px; display: grid; place-items: center;
+      border-radius: 24px; font-size: 34px; font-weight: 800;
+      background: linear-gradient(145deg, #3158ff, #20bfae);
+      box-shadow: 0 18px 50px rgba(49,88,255,.35);
+    }
+    .loader-title { font-size: 26px; font-weight: 800; letter-spacing: -.5px; }
+    .loader-subtitle { margin-top: 7px; color: rgba(255,255,255,.62); font-size: 13px; }
+    .loader-dots { display: flex; justify-content: center; gap: 7px; margin-top: 24px; }
+    .loader-dots i { width: 7px; height: 7px; border-radius: 50%; background: #64e0ce; animation: pulse 1s infinite alternate; }
+    .loader-dots i:nth-child(2) { animation-delay: .2s; }
+    .loader-dots i:nth-child(3) { animation-delay: .4s; }
+    @keyframes pulse { from { opacity: .25; transform: translateY(2px); } to { opacity: 1; transform: translateY(-2px); } }
+  </style>
+</head>
+<body>
+  <div id="ravand-loader" role="status" aria-label="در حال بارگذاری رَوَند">
+    <div class="loader-card">
+      <div class="loader-mark">ر</div>
+      <div class="loader-title">رَوَند</div>
+      <div class="loader-subtitle">در حال آماده‌سازی نبض بازار خودرو…</div>
+      <div class="loader-dots"><i></i><i></i><i></i></div>
+    </div>
+  </div>
+  <!--
+    You can customize the "flutter_bootstrap.js" script.
+    This is useful to provide a custom configuration to the Flutter loader
+    or to give the user feedback during the initialization process.
+
+    For more details:
+    * https://docs.flutter.dev/platform-integration/web/initialization
+  -->
+  <script src="flutter_bootstrap.js" async></script>
+  <script>
+    window.addEventListener('flutter-first-frame', function () {
+      const loader = document.getElementById('ravand-loader');
+      if (!loader) return;
+      loader.classList.add('hide');
+      setTimeout(() => loader.remove(), 300);
+    });
+  </script>
+</body>
+</html>
