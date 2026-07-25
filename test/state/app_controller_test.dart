@@ -124,7 +124,7 @@ CarModel _car({
     uniqueId: uniqueId,
     name: name,
     brand: 'برند آزمایشی',
-    model: 'مدل آزمایشی',
+    model: 'model-$id',
     trim: '',
     year: 1403,
     description: '',
@@ -132,6 +132,6 @@ CarModel _car({
     changePercent: changePercent,
     marketPrice: true,
     lastUpdate: '',
-    typeEn: 'test-car',
+    typeEn: 'test-car-$id',
   );
 }

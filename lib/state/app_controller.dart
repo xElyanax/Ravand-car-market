@@ -6,6 +6,7 @@ import 'package:shamsi_date/shamsi_date.dart';
 
 import '../data/car_model.dart';
 import '../data/car_repository.dart';
+import '../core/formatters.dart';
 
 class AppController extends ChangeNotifier {
   AppController({
@@ -251,24 +252,43 @@ class AppController extends ChangeNotifier {
     _selectedPeriodDays = days;
     _isPeriodLoading = true;
     notifyListeners();
-    final target = DateTime.now().subtract(Duration(days: days));
-    final jalali = Jalali.fromDateTime(target);
-    final date = '${jalali.year}/${jalali.month}/${jalali.day}';
-    final result = await _repository.fetchHistorical(
-      date,
-      forceRefresh: forceRefresh,
-    );
-    final oldById = {for (final car in result.cars) car.id: car};
-    _periodReturns.clear();
-    for (final car in _cars) {
-      final old = oldById[car.id];
-      if (old != null && old.price > 0 && car.price > 0) {
-        _periodReturns[car.id] = (car.price - old.price) * 100 / old.price;
+
+    try {
+      final target = DateTime.now().subtract(Duration(days: days));
+      final date = _toJalaliDate(target);
+
+      final result = await _repository.fetchHistorical(
+        date,
+        forceRefresh: forceRefresh,
+      );
+
+      _periodReturns.clear();
+
+      if (!result.isDemo) {
+        for (final currentCar in _cars) {
+          final historicalCar = _findHistoricalCar(currentCar, result.cars);
+
+          if (historicalCar == null ||
+              historicalCar.price <= 0 ||
+              currentCar.price <= 0) {
+            continue;
+          }
+
+          _periodReturns[currentCar.id] =
+              (currentCar.price - historicalCar.price) *
+              100 /
+              historicalCar.price;
+        }
       }
+
+      _periodDate = result.requestedDate ?? date;
+    } catch (_) {
+      _periodReturns.clear();
+      _periodDate = null;
+    } finally {
+      _isPeriodLoading = false;
+      notifyListeners();
     }
-    _periodDate = result.requestedDate ?? date;
-    _isPeriodLoading = false;
-    notifyListeners();
   }
 
   Future<void> loadCarHistory(
@@ -478,6 +498,52 @@ class AppController extends ChangeNotifier {
     _carHistoryResults.clear();
     _carHistoryLoadingKeys.clear();
     _carHistoryErrors.clear();
+  }
+
+  CarModel? _findHistoricalCar(CarModel target, List<CarModel> candidates) {
+    final targetUniqueId = target.uniqueId.trim();
+
+    if (targetUniqueId.isNotEmpty) {
+      for (final candidate in candidates) {
+        if (candidate.uniqueId.trim() == targetUniqueId) {
+          return candidate;
+        }
+      }
+    }
+
+    if (target.id > 0) {
+      for (final candidate in candidates) {
+        if (candidate.id == target.id) {
+          return candidate;
+        }
+      }
+    }
+
+    final targetIdentity = _carIdentity(target);
+
+    for (final candidate in candidates) {
+      if (_carIdentity(candidate) == targetIdentity) {
+        return candidate;
+      }
+    }
+
+    return null;
+  }
+
+  String _carIdentity(CarModel car) {
+    String normalize(String value) {
+      return cleanText(
+        value,
+      ).replaceAll(RegExp(r'\s+'), ' ').trim().toLowerCase();
+    }
+
+    return [
+      normalize(car.typeEn),
+      normalize(car.brand),
+      normalize(car.model),
+      normalize(car.trim),
+      car.year.toString(),
+    ].join('|');
   }
 
   void _trimSelections() {
