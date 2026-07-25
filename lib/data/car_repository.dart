@@ -32,6 +32,25 @@ class CarDataResult {
   bool get hasError => error != null && error!.isNotEmpty;
 }
 
+class CarHistoryResult {
+  CarHistoryResult({
+    required List<CarPricePoint> points,
+    required List<String> missingDates,
+    required this.usedDemoData,
+  }) : points = List.unmodifiable(points),
+       missingDates = List.unmodifiable(missingDates);
+
+  final List<CarPricePoint> points;
+  final List<String> missingDates;
+  final bool usedDemoData;
+
+  bool get hasData => points.isNotEmpty;
+
+  bool get hasEnoughDataForChart => points.length >= 2;
+
+  bool get isComplete => missingDates.isEmpty;
+}
+
 class CarRepository {
   CarRepository({
     http.Client? client,
@@ -93,6 +112,66 @@ class CarRepository {
     return fetchCars(jalaliDate: jalaliDate, forceRefresh: forceRefresh);
   }
 
+  Future<CarHistoryResult> fetchHistoryForCar({
+    required CarModel car,
+    required Iterable<String> jalaliDates,
+    bool forceRefresh = false,
+    bool allowDemoData = false,
+  }) async {
+    _ensureNotDisposed();
+
+    final uniqueDates = <String>{};
+
+    for (final rawDate in jalaliDates) {
+      final validatedDate = _validateDate(rawDate);
+
+      if (validatedDate != null) {
+        uniqueDates.add(validatedDate);
+      }
+    }
+
+    final pointsByDate = <String, CarPricePoint>{};
+    final missingDates = <String>[];
+    var usedDemoData = false;
+
+    for (final date in uniqueDates) {
+      final snapshot = await fetchHistorical(date, forceRefresh: forceRefresh);
+
+      if (snapshot.isDemo) {
+        usedDemoData = true;
+
+        if (!allowDemoData) {
+          missingDates.add(date);
+          continue;
+        }
+      }
+
+      final historicalCar = _findMatchingCar(
+        target: car,
+        candidates: snapshot.cars,
+      );
+
+      if (historicalCar == null || historicalCar.price <= 0) {
+        missingDates.add(date);
+        continue;
+      }
+
+      pointsByDate[date] = CarPricePoint(
+        date: date,
+        price: historicalCar.price,
+      );
+    }
+
+    final points = pointsByDate.values.toList()
+      ..sort((first, second) => _compareJalaliDates(first.date, second.date));
+
+    return CarHistoryResult(
+      points: points,
+      missingDates: missingDates,
+      usedDemoData: usedDemoData,
+    );
+  }
+
   /// Loads a current or historical full-market snapshot.
   ///
   /// Historical snapshots are immutable and served from the selected-date
@@ -100,6 +179,7 @@ class CarRepository {
   /// only as a graceful fallback. When neither is available, deterministic
   /// demo data keeps the whole product usable and [CarDataResult.isDemo] makes
   /// that state explicit to the UI.
+  ///
   Future<CarDataResult> fetchCars({
     String? jalaliDate,
     bool forceRefresh = false,
@@ -317,6 +397,73 @@ class CarRepository {
       _preferences = value;
       return value;
     });
+  }
+
+  CarModel? _findMatchingCar({
+    required CarModel target,
+    required List<CarModel> candidates,
+  }) {
+    final targetUniqueId = target.uniqueId.trim();
+
+    if (targetUniqueId.isNotEmpty) {
+      for (final candidate in candidates) {
+        if (candidate.uniqueId.trim() == targetUniqueId) {
+          return candidate;
+        }
+      }
+    }
+
+    if (target.id > 0) {
+      for (final candidate in candidates) {
+        if (candidate.id == target.id) {
+          return candidate;
+        }
+      }
+    }
+
+    final targetIdentity = _fallbackCarIdentity(target);
+
+    for (final candidate in candidates) {
+      if (_fallbackCarIdentity(candidate) == targetIdentity) {
+        return candidate;
+      }
+    }
+
+    return null;
+  }
+
+  String _fallbackCarIdentity(CarModel car) {
+    String normalize(String value) {
+      return cleanText(
+        value,
+      ).replaceAll(RegExp(r'\s+'), ' ').trim().toLowerCase();
+    }
+
+    return [
+      normalize(car.typeEn),
+      normalize(car.brand),
+      normalize(car.model),
+      normalize(car.trim),
+      car.year.toString(),
+    ].join('|');
+  }
+
+  int _compareJalaliDates(String first, String second) {
+    return _jalaliSortKey(first).compareTo(_jalaliSortKey(second));
+  }
+
+  int _jalaliSortKey(String value) {
+    final parts = value.split('/');
+
+    if (parts.length != 3) {
+      return 0;
+    }
+
+    final year = int.tryParse(parts[0]) ?? 0;
+    final month = int.tryParse(parts[1]) ?? 0;
+    final day = int.tryParse(parts[2]) ?? 0;
+
+    return (year * 10000) + (month * 100) + day;
   }
 
   List<CarModel> _parseCars(String rawJson) {
