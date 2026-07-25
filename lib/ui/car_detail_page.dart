@@ -22,6 +22,64 @@ class CarDetailPage extends StatefulWidget {
 class _CarDetailPageState extends State<CarDetailPage> {
   int _months = 6;
 
+  int get _selectedDays {
+    return switch (_months) {
+      1 => 30,
+      3 => 90,
+      6 => 180,
+      12 => 365,
+      _ => 180,
+    };
+  }
+
+  @override
+  void initState() {
+    super.initState();
+
+    widget.controller.addListener(_handleControllerChange);
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadHistory();
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant CarDetailPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.removeListener(_handleControllerChange);
+      widget.controller.addListener(_handleControllerChange);
+    }
+
+    if (oldWidget.car.id != widget.car.id ||
+        oldWidget.controller != widget.controller) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _loadHistory();
+      });
+    }
+  }
+
+  void _handleControllerChange() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  void _loadHistory({bool forceRefresh = false}) {
+    widget.controller.loadCarHistory(
+      widget.car,
+      _selectedDays,
+      forceRefresh: forceRefresh,
+    );
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_handleControllerChange);
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final car =
@@ -29,16 +87,33 @@ class _CarDetailPageState extends State<CarDetailPage> {
             .where((item) => item.id == widget.car.id)
             .firstOrNull ??
         widget.car;
-    final points = _visiblePoints(car);
+    final points = widget.controller.historyFor(car, _selectedDays);
+
+    final isHistoryLoading = widget.controller.isHistoryLoading(
+      car,
+      _selectedDays,
+    );
+
+    final historyMessage = widget.controller.historyErrorFor(
+      car,
+      _selectedDays,
+    );
     final prices = points.map((point) => point.price.toDouble()).toList();
+
+    final hasEnoughHistory = points.length >= 2;
+
     final firstPrice = points.isEmpty ? car.price : points.first.price;
+
     final lastPrice = points.isEmpty ? car.price : points.last.price;
-    final periodReturn = firstPrice <= 0
+
+    final periodReturn = !hasEnoughHistory || firstPrice <= 0
         ? 0.0
         : (lastPrice - firstPrice) * 100 / firstPrice;
+
     final minPrice = points.isEmpty
         ? car.price
         : points.map((point) => point.price).reduce(math.min);
+
     final maxPrice = points.isEmpty
         ? car.price
         : points.map((point) => point.price).reduce(math.max);
@@ -124,8 +199,17 @@ class _CarDetailPageState extends State<CarDetailPage> {
                           child: ChoiceChip(
                             selected: _months == entry.key,
                             label: Text(entry.value),
-                            onSelected: (_) =>
-                                setState(() => _months = entry.key),
+                            onSelected: (selected) {
+                              if (!selected || _months == entry.key) {
+                                return;
+                              }
+
+                              setState(() {
+                                _months = entry.key;
+                              });
+
+                              _loadHistory();
+                            },
                           ),
                         ),
                     ],
@@ -136,95 +220,165 @@ class _CarDetailPageState extends State<CarDetailPage> {
                   margin: EdgeInsets.zero,
                   child: Padding(
                     padding: const EdgeInsets.all(18),
-                    child: Column(
-                      children: [
-                        Row(
-                          children: [
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                    child: isHistoryLoading && points.isEmpty
+                        ? const SizedBox(
+                            height: 260,
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                Text(
-                                  'تغییر بازه',
-                                  style: Theme.of(context).textTheme.bodySmall,
-                                ),
-                                const SizedBox(height: 4),
-                                ChangePill(value: periodReturn),
+                                CircularProgressIndicator(),
+                                SizedBox(height: 16),
+                                Text('در حال دریافت تاریخچه واقعی قیمت...'),
                               ],
                             ),
-                            const Spacer(),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.end,
+                          )
+                        : !hasEnoughHistory
+                        ? SizedBox(
+                            height: 260,
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                Text(
-                                  'آخرین قیمت',
-                                  style: Theme.of(context).textTheme.bodySmall,
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  formatCompactToman(lastPrice),
-                                  style: Theme.of(
+                                Icon(
+                                  Icons.query_stats_rounded,
+                                  size: 48,
+                                  color: Theme.of(
                                     context,
-                                  ).textTheme.titleMedium,
+                                  ).colorScheme.onSurfaceVariant,
+                                ),
+                                const SizedBox(height: 14),
+                                Text(
+                                  historyMessage ??
+                                      'داده تاریخی کافی برای این خودرو وجود ندارد.',
+                                  textAlign: TextAlign.center,
+                                  style: Theme.of(context).textTheme.bodyMedium,
+                                ),
+                                const SizedBox(height: 16),
+                                OutlinedButton.icon(
+                                  onPressed: isHistoryLoading
+                                      ? null
+                                      : () {
+                                          _loadHistory(forceRefresh: true);
+                                        },
+                                  icon: const Icon(Icons.refresh_rounded),
+                                  label: const Text('تلاش دوباره'),
                                 ),
                               ],
                             ),
-                          ],
-                        ),
-                        const SizedBox(height: 22),
-                        Directionality(
-                          textDirection: TextDirection.ltr,
-                          child: GridTrendChart(
-                            primaryValues: prices.isEmpty
-                                ? [car.price.toDouble()]
-                                : prices,
-                            primaryColor: periodReturn >= 0
-                                ? AppColors.positive
-                                : AppColors.negative,
-                            height: 205,
+                          )
+                        : Column(
+                            children: [
+                              Row(
+                                children: [
+                                  Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'تغییر بازه',
+                                        style: Theme.of(
+                                          context,
+                                        ).textTheme.bodySmall,
+                                      ),
+                                      const SizedBox(height: 4),
+                                      ChangePill(value: periodReturn),
+                                    ],
+                                  ),
+                                  const Spacer(),
+                                  Column(
+                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                    children: [
+                                      Text(
+                                        'آخرین قیمت',
+                                        style: Theme.of(
+                                          context,
+                                        ).textTheme.bodySmall,
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        formatCompactToman(lastPrice),
+                                        style: Theme.of(
+                                          context,
+                                        ).textTheme.titleMedium,
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 22),
+                              Directionality(
+                                textDirection: TextDirection.ltr,
+                                child: GridTrendChart(
+                                  primaryValues: prices,
+                                  primaryColor: periodReturn >= 0
+                                      ? AppColors.positive
+                                      : AppColors.negative,
+                                  height: 205,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    toPersianDigits(points.first.date),
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.labelSmall,
+                                  ),
+                                  Text(
+                                    toPersianDigits(points.last.date),
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.labelSmall,
+                                  ),
+                                ],
+                              ),
+                              if (historyMessage != null) ...[
+                                const SizedBox(height: 14),
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.surfaceContainerHighest,
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Text(
+                                    historyMessage,
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.bodySmall,
+                                  ),
+                                ),
+                              ],
+                            ],
                           ),
-                        ),
-                        const SizedBox(height: 10),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              points.isEmpty
-                                  ? 'ابتدای بازه'
-                                  : toPersianDigits(points.first.date),
-                              style: Theme.of(context).textTheme.labelSmall,
-                            ),
-                            Text(
-                              points.isEmpty
-                                  ? 'امروز'
-                                  : toPersianDigits(points.last.date),
-                              style: Theme.of(context).textTheme.labelSmall,
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
                   ),
                 ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _StatCard(
-                        label: 'کمینه بازه',
-                        value: formatCompactToman(minPrice),
-                        icon: Icons.south_rounded,
+                if (hasEnoughHistory) ...[
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _StatCard(
+                          label: 'کمینه بازه',
+                          value: formatCompactToman(minPrice),
+                          icon: Icons.south_rounded,
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: _StatCard(
-                        label: 'بیشینه بازه',
-                        value: formatCompactToman(maxPrice),
-                        icon: Icons.north_rounded,
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _StatCard(
+                          label: 'بیشینه بازه',
+                          value: formatCompactToman(maxPrice),
+                          icon: Icons.north_rounded,
+                        ),
                       ),
-                    ),
-                  ],
-                ),
+                    ],
+                  ),
+                ],
                 const SizedBox(height: 26),
                 const SectionHeading(title: 'مشخصات و منبع قیمت'),
                 const SizedBox(height: 12),
@@ -306,23 +460,6 @@ class _CarDetailPageState extends State<CarDetailPage> {
         ),
       ),
     );
-  }
-
-  List<CarPricePoint> _visiblePoints(CarModel car) {
-    if (car.history.isNotEmpty) {
-      final take = math.min(_months + 1, car.history.length);
-      return car.history.sublist(car.history.length - take);
-    }
-    final change = widget.controller.returnFor(car);
-    if (change == 0 || car.price <= 0) return const [];
-    final oldPrice = (car.price / (1 + change / 100)).round();
-    return [
-      CarPricePoint(
-        date: widget.controller.periodDate ?? 'ابتدای بازه',
-        price: oldPrice,
-      ),
-      CarPricePoint(date: 'امروز', price: car.price),
-    ];
   }
 }
 
