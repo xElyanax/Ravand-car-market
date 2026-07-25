@@ -33,6 +33,9 @@ class AppController extends ChangeNotifier {
   final Set<String> _favoriteIds = {};
   final List<String> _compareIds = [];
   final Map<int, double> _periodReturns = {};
+  final Map<String, CarHistoryResult> _carHistoryResults = {};
+  final Set<String> _carHistoryLoadingKeys = {};
+  final Map<String, String> _carHistoryErrors = {};
 
   List<CarModel> _cars = const [];
   CarDataSource _source = CarDataSource.demo;
@@ -59,7 +62,28 @@ class AppController extends ChangeNotifier {
   int get selectedPeriodDays => _selectedPeriodDays;
   int get tabIndex => _tabIndex;
   Map<int, double> get periodReturns => Map.unmodifiable(_periodReturns);
-  Set<String> get favoriteIds => Set.unmodifiable(_favoriteIds);
+
+  List<CarPricePoint> historyFor(CarModel car, int days) {
+    final result = _carHistoryResults[_historyKey(car, days)];
+    return result?.points ?? const [];
+  }
+
+  bool isHistoryLoading(CarModel car, int days) {
+    return _carHistoryLoadingKeys.contains(_historyKey(car, days));
+  }
+
+  String? historyErrorFor(CarModel car, int days) {
+    return _carHistoryErrors[_historyKey(car, days)];
+  }
+
+  bool hasEnoughHistory(CarModel car, int days) {
+    return _carHistoryResults[_historyKey(car, days)]?.hasEnoughDataForChart ??
+        false;
+  }
+
+  List<String> missingHistoryDatesFor(CarModel car, int days) {
+    return _carHistoryResults[_historyKey(car, days)]?.missingDates ?? const [];
+  }
 
   List<CarModel> get favoriteCars =>
       _cars.where((car) => _favoriteIds.contains(car.uniqueId)).toList();
@@ -118,35 +142,53 @@ class AppController extends ChangeNotifier {
     _fetchedAt = result.fetchedAt;
     _errorMessage = result.error;
     _trimSelections();
+    _clearCarHistory();
   }
 
   Future<bool> connectWithToken(String token) async {
     final normalized = token.trim();
-    if (normalized.isEmpty) return false;
+
+    if (normalized.isEmpty) {
+      return false;
+    }
 
     final previousRuntimeToken = _repository.runtimeToken;
+
     _repository.setRuntimeToken(normalized);
+
     _isLoading = true;
     _errorMessage = null;
+
     notifyListeners();
 
     final result = await _repository.fetchLatest(forceRefresh: true);
+
     final connected = result.source == CarDataSource.network;
+
     if (connected) {
       await _preferences.setString(_tokenKey, normalized);
     } else {
       _repository.setRuntimeToken(previousRuntimeToken);
     }
 
-    if (result.cars.isNotEmpty) _cars = result.cars;
+    if (result.cars.isNotEmpty) {
+      _cars = result.cars;
+    }
+
+    // تاریخچه‌های قبلی مربوط به داده یا توکن قبلی هستند.
+    _clearCarHistory();
+
     _source = result.source;
     _fetchedAt = result.fetchedAt;
     _errorMessage = result.error;
     _isLoading = false;
+
     notifyListeners();
+
     if (connected) {
       await loadPeriod(_selectedPeriodDays, forceRefresh: true);
     }
+
     return connected;
   }
 
@@ -229,6 +271,87 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> loadCarHistory(
+    CarModel car,
+    int days, {
+    bool forceRefresh = false,
+  }) async {
+    final normalizedDays = _normalizeHistoryDays(days);
+    final key = _historyKey(car, normalizedDays);
+
+    if (_carHistoryLoadingKeys.contains(key)) {
+      return;
+    }
+
+    if (!forceRefresh && _carHistoryResults.containsKey(key)) {
+      return;
+    }
+
+    if (_source == CarDataSource.demo) {
+      _carHistoryResults.remove(key);
+      _carHistoryErrors[key] =
+          'در حالت نمایشی، تاریخچه واقعی قیمت در دسترس نیست.';
+      notifyListeners();
+      return;
+    }
+
+    _carHistoryLoadingKeys.add(key);
+    _carHistoryErrors.remove(key);
+    notifyListeners();
+
+    try {
+      final dates = _buildHistoryDates(normalizedDays);
+
+      final historicalResult = await _repository.fetchHistoryForCar(
+        car: car,
+        jalaliDates: dates,
+        forceRefresh: forceRefresh,
+        allowDemoData: false,
+      );
+
+      final pointsByDate = <String, CarPricePoint>{
+        for (final point in historicalResult.points) point.date: point,
+      };
+
+      if (car.price > 0) {
+        final today = _toJalaliDate(DateTime.now());
+
+        pointsByDate[today] = CarPricePoint(date: today, price: car.price);
+      }
+
+      final points = pointsByDate.values.toList()
+        ..sort(
+          (first, second) =>
+              _jalaliSortKey(first.date).compareTo(_jalaliSortKey(second.date)),
+        );
+
+      final result = CarHistoryResult(
+        points: points,
+        missingDates: historicalResult.missingDates,
+        usedDemoData: historicalResult.usedDemoData,
+      );
+
+      _carHistoryResults[key] = result;
+
+      if (!result.hasEnoughDataForChart) {
+        _carHistoryErrors[key] =
+            'داده تاریخی کافی برای رسم نمودار این خودرو پیدا نشد.';
+      } else if (result.usedDemoData) {
+        _carHistoryErrors[key] =
+            'بعضی تاریخ‌ها از سرویس دریافت نشدند و از نمودار حذف شدند.';
+      } else if (result.missingDates.isNotEmpty) {
+        _carHistoryErrors[key] =
+            'برای ${result.missingDates.length} تاریخ، قیمت این خودرو موجود نبود.';
+      }
+    } catch (_) {
+      _carHistoryResults.remove(key);
+      _carHistoryErrors[key] = 'دریافت تاریخچه قیمت این خودرو با خطا مواجه شد.';
+    } finally {
+      _carHistoryLoadingKeys.remove(key);
+      notifyListeners();
+    }
+  }
+
   double returnFor(CarModel car) => _periodReturns[car.id] ?? car.changePercent;
 
   Future<InvestmentResult> calculateInvestment(CarModel car, int days) async {
@@ -276,6 +399,71 @@ class AppController extends ChangeNotifier {
             : a.changePercent.compareTo(b.changePercent),
       );
     return result.take(math.min(limit, result.length)).toList();
+  }
+
+  String _historyKey(CarModel car, int days) {
+    return '${car.id}:$days';
+  }
+
+  int _normalizeHistoryDays(int days) {
+    return switch (days) {
+      30 => 30,
+      90 => 90,
+      180 => 180,
+      365 => 365,
+      _ => 30,
+    };
+  }
+
+  List<String> _buildHistoryDates(int days) {
+    final totalPoints = switch (days) {
+      30 => 6,
+      90 => 7,
+      180 => 7,
+      365 => 13,
+      _ => 6,
+    };
+
+    final now = DateTime.now();
+    final dates = <String>{};
+
+    // نقطه امروز جداگانه با قیمت فعلی خودرو اضافه می‌شود.
+    // در اینجا فقط تاریخ‌های گذشته ساخته می‌شوند.
+    for (var index = totalPoints - 1; index >= 1; index--) {
+      final offsetDays = (days * index / (totalPoints - 1)).round();
+
+      final date = now.subtract(Duration(days: offsetDays));
+
+      dates.add(_toJalaliDate(date));
+    }
+
+    return dates.toList();
+  }
+
+  String _toJalaliDate(DateTime date) {
+    final jalali = Jalali.fromDateTime(date);
+
+    return '${jalali.year}/${jalali.month}/${jalali.day}';
+  }
+
+  int _jalaliSortKey(String value) {
+    final parts = value.split('/');
+
+    if (parts.length != 3) {
+      return 0;
+    }
+
+    final year = int.tryParse(parts[0]) ?? 0;
+    final month = int.tryParse(parts[1]) ?? 0;
+    final day = int.tryParse(parts[2]) ?? 0;
+
+    return (year * 10000) + (month * 100) + day;
+  }
+
+  void _clearCarHistory() {
+    _carHistoryResults.clear();
+    _carHistoryLoadingKeys.clear();
+    _carHistoryErrors.clear();
   }
 
   void _trimSelections() {
