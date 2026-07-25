@@ -19,6 +19,7 @@ class CarDataResult {
     required this.fetchedAt,
     this.requestedDate,
     this.error,
+    this.isMissingSnapshot = false,
   }) : cars = List.unmodifiable(cars);
 
   final List<CarModel> cars;
@@ -26,6 +27,7 @@ class CarDataResult {
   final DateTime fetchedAt;
   final String? requestedDate;
   final String? error;
+  final bool isMissingSnapshot;
 
   bool get isDemo => source == CarDataSource.demo;
   bool get isStale => source == CarDataSource.cache;
@@ -136,9 +138,16 @@ class CarRepository {
     return 'sourcearena.history.$safeDate.json.v2';
   }
 
+  static const _missingHistoryCacheTtl = Duration(hours: 12);
+
   static String _historySavedAtKeyFor(String date) {
     final safeDate = date.replaceAll('/', '_');
     return 'sourcearena.history.$safeDate.saved_at.v2';
+  }
+
+  static String _historyMissingAtKeyFor(String date) {
+    final safeDate = date.replaceAll('/', '_');
+    return 'sourcearena.history.$safeDate.missing_at.v1';
   }
 
   final http.Client _client;
@@ -258,6 +267,11 @@ class CarRepository {
     for (final date in uniqueDates) {
       final snapshot = await fetchHistorical(date, forceRefresh: forceRefresh);
 
+      if (snapshot.isMissingSnapshot) {
+        missingDates.add(date);
+        continue;
+      }
+
       if (snapshot.isDemo) {
         usedDemoData = true;
 
@@ -321,6 +335,11 @@ class CarRepository {
     for (final date in uniqueDates) {
       // هر تاریخ فقط یک بار از API یا Cache دریافت می‌شود.
       final snapshot = await fetchHistorical(date, forceRefresh: forceRefresh);
+
+      if (snapshot.isMissingSnapshot) {
+        missingDates.add(date);
+        continue;
+      }
 
       if (snapshot.isDemo) {
         usedDemoData = true;
@@ -386,7 +405,16 @@ class CarRepository {
 
     if (requestedDate != null && !forceRefresh) {
       final cached = await _readCache(requestedDate: requestedDate);
-      if (cached != null) return cached;
+
+      if (cached != null) {
+        return cached;
+      }
+
+      final missingCached = await _readMissingHistoryCache(requestedDate);
+
+      if (missingCached != null) {
+        return missingCached;
+      }
     }
 
     final token = effectiveToken;
@@ -422,9 +450,27 @@ class CarRepository {
       if (rawJson.startsWith('\ufeff')) rawJson = rawJson.substring(1);
       final cars = _parseCars(rawJson);
       if (cars.isEmpty) {
+        if (requestedDate != null) {
+          final now = DateTime.now();
+
+          await _writeMissingHistoryCache(requestedDate, now);
+
+          return CarDataResult(
+            cars: const [],
+            source: CarDataSource.network,
+            fetchedAt: now,
+            requestedDate: requestedDate,
+            isMissingSnapshot: true,
+          );
+        }
+
         throw const _RepositoryException(
           'پاسخ سرویس معتبر بود اما خودرویی در آن پیدا نشد.',
         );
+      }
+
+      if (requestedDate != null) {
+        await _clearMissingHistoryCache(requestedDate);
       }
 
       await _writeCache(
@@ -514,7 +560,66 @@ class CarRepository {
       fetchedAt: result.fetchedAt,
       requestedDate: result.requestedDate,
       error: error,
+      isMissingSnapshot: result.isMissingSnapshot,
     );
+  }
+
+  Future<CarDataResult?> _readMissingHistoryCache(String requestedDate) async {
+    try {
+      final preferences = await _getPreferences();
+      final value = preferences.getString(
+        _historyMissingAtKeyFor(requestedDate),
+      );
+
+      final missingAt = DateTime.tryParse(value ?? '');
+
+      if (missingAt == null) {
+        return null;
+      }
+
+      final age = DateTime.now().difference(missingAt);
+
+      if (age.isNegative || age > _missingHistoryCacheTtl) {
+        await preferences.remove(_historyMissingAtKeyFor(requestedDate));
+        return null;
+      }
+
+      return CarDataResult(
+        cars: const [],
+        source: CarDataSource.cache,
+        fetchedAt: missingAt,
+        requestedDate: requestedDate,
+        isMissingSnapshot: true,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _writeMissingHistoryCache(
+    String requestedDate,
+    DateTime savedAt,
+  ) async {
+    try {
+      final preferences = await _getPreferences();
+
+      await preferences.setString(
+        _historyMissingAtKeyFor(requestedDate),
+        savedAt.toIso8601String(),
+      );
+    } catch (_) {
+      // شکست Cache نباید دریافت داده را متوقف کند.
+    }
+  }
+
+  Future<void> _clearMissingHistoryCache(String requestedDate) async {
+    try {
+      final preferences = await _getPreferences();
+
+      await preferences.remove(_historyMissingAtKeyFor(requestedDate));
+    } catch (_) {
+      // حذف نشدن Cache نباید پاسخ موفق را خراب کند.
+    }
   }
 
   Future<CarDataResult?> _readCache({required String? requestedDate}) async {
