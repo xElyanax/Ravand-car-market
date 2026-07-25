@@ -1,3 +1,6 @@
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -84,7 +87,10 @@ class _FakeCarRepository extends CarRepository {
     required SharedPreferences preferences,
     required this.latestCars,
     required this.historicalCars,
-  }) : super(preferences: preferences);
+  }) : super(
+         preferences: preferences,
+         client: MockClient((_) async => http.Response('[]', 200)),
+       );
 
   final List<CarModel> latestCars;
   final List<CarModel> historicalCars;
