@@ -6,6 +6,7 @@ import 'api_setup_sheet.dart';
 import 'compare_page.dart';
 import 'home_page.dart';
 import 'market_page.dart';
+import 'investment_page.dart';
 
 class AppShell extends StatelessWidget {
   const AppShell({super.key, required this.controller});
@@ -29,6 +30,12 @@ class AppShell extends StatelessWidget {
       label: 'تحلیل',
     ),
     NavigationDestination(
+  icon: Icon(Icons.account_balance_wallet_outlined),
+  selectedIcon: Icon(Icons.account_balance_wallet_rounded),
+  label: 'سرمایه‌گذاری',
+),
+
+    NavigationDestination(
       icon: Icon(Icons.compare_arrows_outlined),
       selectedIcon: Icon(Icons.compare_arrows_rounded),
       label: 'مقایسه',
@@ -40,13 +47,14 @@ class AppShell extends StatelessWidget {
     return ListenableBuilder(
       listenable: controller,
       builder: (context, _) {
-        final pages = [
+        final List<Widget> pages = [
           HomePage(
             controller: controller,
             onApiSettings: () => _showApi(context),
           ),
           MarketPage(controller: controller),
           AnalyticsPage(controller: controller),
+          InvestmentPage(controller: controller),
           ComparePage(controller: controller),
         ];
         final isWide = MediaQuery.sizeOf(context).width >= 900;
@@ -84,6 +92,12 @@ class AppShell extends StatelessWidget {
                         selectedIcon: Icon(Icons.insights_rounded),
                         label: Text('تحلیل'),
                       ),
+                      NavigationRailDestination(
+  icon: Icon(Icons.account_balance_wallet_outlined),
+  selectedIcon: Icon(Icons.account_balance_wallet_rounded),
+  label: Text('سرمایه‌گذاری'),
+),
+
                       NavigationRailDestination(
                         icon: Icon(Icons.compare_arrows_outlined),
                         selectedIcon: Icon(Icons.compare_arrows_rounded),
@@ -123,15 +137,16 @@ class AppShell extends StatelessWidget {
               onDestinationSelected: controller.setTab,
               destinations: _destinations,
             ),
+            
           ),
           floatingActionButtonLocation:
               FloatingActionButtonLocation.centerFloat,
-          floatingActionButton: comparisonCount > 0 && controller.tabIndex != 3
+          floatingActionButton: comparisonCount > 0 && controller.tabIndex != 4
               ? Padding(
                   padding: const EdgeInsets.only(bottom: 72),
                   child: FloatingActionButton.extended(
                     heroTag: 'compare-selection',
-                    onPressed: () => controller.setTab(3),
+                    onPressed: () => controller.setTab(4),
                     icon: const Icon(Icons.compare_arrows_rounded),
                     label: Text(
                       comparisonCount == 1
