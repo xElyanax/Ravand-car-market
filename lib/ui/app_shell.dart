@@ -7,6 +7,7 @@ import 'compare_page.dart';
 import 'home_page.dart';
 import 'market_page.dart';
 import 'investment_page.dart';
+import 'budget_suggestion_page.dart';
 
 class AppShell extends StatelessWidget {
   const AppShell({super.key, required this.controller});
@@ -30,10 +31,15 @@ class AppShell extends StatelessWidget {
       label: 'تحلیل',
     ),
     NavigationDestination(
-  icon: Icon(Icons.account_balance_wallet_outlined),
-  selectedIcon: Icon(Icons.account_balance_wallet_rounded),
-  label: 'سرمایه‌گذاری',
-),
+      icon: Icon(Icons.account_balance_wallet_outlined),
+      selectedIcon: Icon(Icons.account_balance_wallet_rounded),
+      label: 'سرمایه‌گذاری',
+    ),
+    NavigationDestination(
+      icon: Icon(Icons.account_balance_wallet_outlined),
+      selectedIcon: Icon(Icons.account_balance_wallet_rounded),
+      label: 'پیشنهاد بودجه',
+    ),
 
     NavigationDestination(
       icon: Icon(Icons.compare_arrows_outlined),
@@ -54,8 +60,10 @@ class AppShell extends StatelessWidget {
           ),
           MarketPage(controller: controller),
           AnalyticsPage(controller: controller),
-          InvestmentPage(controller: controller),
+          InvestmentPage(controller: controller), 
+          BudgetSuggestionPage(controller: controller),
           ComparePage(controller: controller),
+        
         ];
         final isWide = MediaQuery.sizeOf(context).width >= 900;
         if (isWide) {
@@ -93,10 +101,16 @@ class AppShell extends StatelessWidget {
                         label: Text('تحلیل'),
                       ),
                       NavigationRailDestination(
-  icon: Icon(Icons.account_balance_wallet_outlined),
-  selectedIcon: Icon(Icons.account_balance_wallet_rounded),
-  label: Text('سرمایه‌گذاری'),
-),
+                        icon: Icon(Icons.account_balance_wallet_outlined),
+                        selectedIcon: Icon(Icons.account_balance_wallet_rounded),
+                      label: Text('سرمایه‌گذاری'),
+                      ),
+
+                      NavigationRailDestination(
+                        icon: Icon(Icons.account_balance_wallet_outlined),
+                        selectedIcon: Icon(Icons.account_balance_wallet_rounded),
+                        label: Text('پیشنهاد بودجه'),
+                      ),
 
                       NavigationRailDestination(
                         icon: Icon(Icons.compare_arrows_outlined),
@@ -141,12 +155,12 @@ class AppShell extends StatelessWidget {
           ),
           floatingActionButtonLocation:
               FloatingActionButtonLocation.centerFloat,
-          floatingActionButton: comparisonCount > 0 && controller.tabIndex != 4
+          floatingActionButton: comparisonCount > 0 && controller.tabIndex != 5
               ? Padding(
                   padding: const EdgeInsets.only(bottom: 72),
                   child: FloatingActionButton.extended(
                     heroTag: 'compare-selection',
-                    onPressed: () => controller.setTab(4),
+                    onPressed: () => controller.setTab(5),
                     icon: const Icon(Icons.compare_arrows_rounded),
                     label: Text(
                       comparisonCount == 1
