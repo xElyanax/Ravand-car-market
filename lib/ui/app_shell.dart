@@ -8,6 +8,7 @@ import 'home_page.dart';
 import 'market_page.dart';
 import 'investment_page.dart';
 import 'budget_suggestion_page.dart';
+import 'settings_page.dart';
 
 class AppShell extends StatelessWidget {
   const AppShell({super.key, required this.controller});
@@ -20,6 +21,8 @@ class AppShell extends StatelessWidget {
       selectedIcon: Icon(Icons.space_dashboard_rounded),
       label: 'خانه',
     ),
+    
+
     NavigationDestination(
       icon: Icon(Icons.directions_car_outlined),
       selectedIcon: Icon(Icons.directions_car_rounded),
@@ -46,6 +49,10 @@ class AppShell extends StatelessWidget {
       selectedIcon: Icon(Icons.compare_arrows_rounded),
       label: 'مقایسه',
     ),
+    NavigationDestination(
+    icon: Icon(Icons.settings_rounded),
+    label: 'تنظیمات',
+    ),
   ];
 
   @override
@@ -63,7 +70,7 @@ class AppShell extends StatelessWidget {
           InvestmentPage(controller: controller), 
           BudgetSuggestionPage(controller: controller),
           ComparePage(controller: controller),
-        
+          SettingsPage(controller: controller),
         ];
         final isWide = MediaQuery.sizeOf(context).width >= 900;
         if (isWide) {
@@ -117,6 +124,11 @@ class AppShell extends StatelessWidget {
                         selectedIcon: Icon(Icons.compare_arrows_rounded),
                         label: Text('مقایسه'),
                       ),
+                      NavigationRailDestination(
+                        icon: Icon(Icons.settings_outlined),
+                        selectedIcon: Icon(Icons.settings_rounded),
+                        label: Text('تنظیمات'),
+                      ),
                     ],
                   ),
                 ),
@@ -155,12 +167,12 @@ class AppShell extends StatelessWidget {
           ),
           floatingActionButtonLocation:
               FloatingActionButtonLocation.centerFloat,
-          floatingActionButton: comparisonCount > 0 && controller.tabIndex != 5
+          floatingActionButton: comparisonCount > 0 && controller.tabIndex != 6
               ? Padding(
                   padding: const EdgeInsets.only(bottom: 72),
                   child: FloatingActionButton.extended(
                     heroTag: 'compare-selection',
-                    onPressed: () => controller.setTab(5),
+                    onPressed: () => controller.setTab(6),
                     icon: const Icon(Icons.compare_arrows_rounded),
                     label: Text(
                       comparisonCount == 1
@@ -174,6 +186,7 @@ class AppShell extends StatelessWidget {
       },
     );
   }
+
 
   void _showApi(BuildContext context) {
     showModalBottomSheet<void>(
