@@ -6,6 +6,9 @@ import 'api_setup_sheet.dart';
 import 'compare_page.dart';
 import 'home_page.dart';
 import 'market_page.dart';
+import 'investment_page.dart';
+import 'budget_suggestion_page.dart';
+import 'settings_page.dart';
 
 class AppShell extends StatelessWidget {
   const AppShell({super.key, required this.controller});
@@ -18,6 +21,8 @@ class AppShell extends StatelessWidget {
       selectedIcon: Icon(Icons.space_dashboard_rounded),
       label: 'خانه',
     ),
+    
+
     NavigationDestination(
       icon: Icon(Icons.directions_car_outlined),
       selectedIcon: Icon(Icons.directions_car_rounded),
@@ -29,9 +34,24 @@ class AppShell extends StatelessWidget {
       label: 'تحلیل',
     ),
     NavigationDestination(
+      icon: Icon(Icons.account_balance_wallet_outlined),
+      selectedIcon: Icon(Icons.account_balance_wallet_rounded),
+      label: 'سرمایه‌گذاری',
+    ),
+    NavigationDestination(
+      icon: Icon(Icons.account_balance_wallet_outlined),
+      selectedIcon: Icon(Icons.account_balance_wallet_rounded),
+      label: 'پیشنهاد بودجه',
+    ),
+
+    NavigationDestination(
       icon: Icon(Icons.compare_arrows_outlined),
       selectedIcon: Icon(Icons.compare_arrows_rounded),
       label: 'مقایسه',
+    ),
+    NavigationDestination(
+    icon: Icon(Icons.settings_rounded),
+    label: 'تنظیمات',
     ),
   ];
 
@@ -40,14 +60,17 @@ class AppShell extends StatelessWidget {
     return ListenableBuilder(
       listenable: controller,
       builder: (context, _) {
-        final pages = [
+        final List<Widget> pages = [
           HomePage(
             controller: controller,
             onApiSettings: () => _showApi(context),
           ),
           MarketPage(controller: controller),
           AnalyticsPage(controller: controller),
+          InvestmentPage(controller: controller), 
+          BudgetSuggestionPage(controller: controller),
           ComparePage(controller: controller),
+          SettingsPage(controller: controller),
         ];
         final isWide = MediaQuery.sizeOf(context).width >= 900;
         if (isWide) {
@@ -85,9 +108,26 @@ class AppShell extends StatelessWidget {
                         label: Text('تحلیل'),
                       ),
                       NavigationRailDestination(
+                        icon: Icon(Icons.account_balance_wallet_outlined),
+                        selectedIcon: Icon(Icons.account_balance_wallet_rounded),
+                      label: Text('سرمایه‌گذاری'),
+                      ),
+
+                      NavigationRailDestination(
+                        icon: Icon(Icons.account_balance_wallet_outlined),
+                        selectedIcon: Icon(Icons.account_balance_wallet_rounded),
+                        label: Text('پیشنهاد بودجه'),
+                      ),
+
+                      NavigationRailDestination(
                         icon: Icon(Icons.compare_arrows_outlined),
                         selectedIcon: Icon(Icons.compare_arrows_rounded),
                         label: Text('مقایسه'),
+                      ),
+                      NavigationRailDestination(
+                        icon: Icon(Icons.settings_outlined),
+                        selectedIcon: Icon(Icons.settings_rounded),
+                        label: Text('تنظیمات'),
                       ),
                     ],
                   ),
@@ -123,15 +163,16 @@ class AppShell extends StatelessWidget {
               onDestinationSelected: controller.setTab,
               destinations: _destinations,
             ),
+            
           ),
           floatingActionButtonLocation:
               FloatingActionButtonLocation.centerFloat,
-          floatingActionButton: comparisonCount > 0 && controller.tabIndex != 3
+          floatingActionButton: comparisonCount > 0 && controller.tabIndex != 6
               ? Padding(
                   padding: const EdgeInsets.only(bottom: 72),
                   child: FloatingActionButton.extended(
                     heroTag: 'compare-selection',
-                    onPressed: () => controller.setTab(3),
+                    onPressed: () => controller.setTab(6),
                     icon: const Icon(Icons.compare_arrows_rounded),
                     label: Text(
                       comparisonCount == 1
@@ -145,6 +186,7 @@ class AppShell extends StatelessWidget {
       },
     );
   }
+
 
   void _showApi(BuildContext context) {
     showModalBottomSheet<void>(
